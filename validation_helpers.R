@@ -164,6 +164,7 @@
     if (any(pheno$OUTCOME_TIME < 0, na.rm = TRUE)) {
       stop("OUTCOME_TIME must be non-negative")
     }
+    warning("OUTCOME_TIME is assumed to be measured in years. Convert source data before running if time is recorded in days, months, or another unit.")
 
     status_num <- suppressWarnings(as.integer(as.character(pheno$OUTCOME_STATUS)))
     non_missing_status <- !is.na(pheno$OUTCOME_STATUS)

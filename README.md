@@ -197,6 +197,10 @@ Outcome columns must follow exactly one schema:
 | Continuous | `OUTCOME` |
 | Time-to-event | `OUTCOME_TIME`, `OUTCOME_STATUS` |
 
+For time-to-event outcomes, `OUTCOME_TIME` must be measured in years. The
+validator warns about this assumption but cannot verify the unit from the data
+alone.
+
 Data requirements:
 
 - `FU` must be consecutive integers starting at `0` and must include `1`.

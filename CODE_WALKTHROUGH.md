@@ -1,356 +1,125 @@
-# OutcomeWAS Code Walkthrough
+# OutcomeWAS Pipeline: Code Walkthrough
 
-OutcomeWAS estimates `analyte -> outcome` associations inside a trial, while
-retaining `TREATMENT_GROUP` as an adjustment covariate. The current
-implementation supports:
+<style>
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0 1.5em 0;
+}
 
-- continuous outcomes via `OUTCOME`
-- time-to-event outcomes via `OUTCOME_TIME` and `OUTCOME_STATUS`
-- analyte `change` models and analyte `level` models
-- pooled, male-only, and female-only analyses
-- Proteomics, Metabolomics, and DNAm inputs
-- multiple follow-up visits, handled as separate models per follow-up
+th,
+td {
+  border: 1px solid #d0d7de;
+  padding: 0.45em 0.65em;
+  vertical-align: top;
+}
 
-Unlike TreatmentWAS, OutcomeWAS does **not** use mixed models. If a
-study has `FU = 0, 1, 2`, the pipeline fits one set of models comparing
-baseline to FU1 and a second set comparing baseline to FU2.
+th {
+  background: #f6f8fa;
+  font-weight: 600;
+}
 
-## File Map
+pre {
+  margin: 1em 0 1.5em 0;
+}
 
-- `main.R`: public API
-- `validation_helpers.R`: input validation and phenotype/omics harmonization
-- `analysis_helpers.R`: per-analyte model fitting, FU looping, BH correction,
-  DNAm filtered correction, checkpointing
-- `reporting_helpers.R`: QC summaries and outcome summaries
-- `test_comprehensive.R`: regression test suite covering single-FU and
-  multi-FU, continuous and TTE, non-DNAm and DNAm
+.note {
+  border-left: 4px solid #6f42c1;
+  background: #f6f3fb;
+  padding: 0.75em 1em;
+  margin: 1em 0 1.5em 0;
+}
+</style>
 
-## Public API
+This walkthrough documents the current behavior of the OutcomeWAS pipeline in
+`main.R` and helper files. The pipeline estimates `analyte -> outcome`
+associations inside randomized trial datasets while retaining
+`TREATMENT_GROUP` as an adjustment covariate.
 
-The package exposes two entry points.
+OutcomeWAS exposes two public functions:
+
+- `FAST_outcome_WAS()`: runs the statistical analyses with parallelization and
+  optional checkpointing.
+- `FAST_outcome_WAS_reports()`: generates QC and data summary reports without
+  fitting models.
+
+<div class="note">
+Unlike TreatmentWAS, OutcomeWAS does not use mixed models. Multi-follow-up data
+are handled as separate baseline-to-follow-up analyses for each nonzero `FU`.
+</div>
+
+## Table of Contents
+
+1. [File Structure](#file-structure)
+2. [Main Functions](#main-functions)
+3. [Accepted Inputs](#accepted-inputs)
+4. [Validation Flow](#validation-flow)
+5. [High-Level Pipeline Flow](#high-level-pipeline-flow)
+6. [Analysis Design](#analysis-design)
+7. [Model Formulas](#model-formulas)
+8. [Parallelization and Checkpointing](#parallelization-and-checkpointing)
+9. [Multiple Testing Correction](#multiple-testing-correction)
+10. [DNAm Probe Sets](#dnam-probe-sets)
+11. [Reporting Pipeline](#reporting-pipeline)
+12. [Results Output](#results-output)
+
+---
+
+## File Structure
+
+```text
+main.R                       Public API: FAST_outcome_WAS(), FAST_outcome_WAS_reports()
+validation_helpers.R         Input validation and phenotype/omics harmonization
+analysis_helpers.R           Model fitting, FU looping, BH correction, checkpointing
+reporting_helpers.R          QC summaries and outcome reports
+plotting_helpers.R           QQ and volcano plots from outcome_effects
+test_comprehensive.R         Main regression suite
+test_parallel_checkpoint.R   Parallelization and checkpointing tests
+```
+
+Function locations:
+
+| File | Key functions |
+|:---|:---|
+| `main.R` | `FAST_outcome_WAS()`, `FAST_outcome_WAS_reports()` |
+| `validation_helpers.R` | `.detect_outcome_type()`, `.validate_omics_type()`, `.validate_pheno()`, `.validate_omics()`, `.validate_dnam_probe_coverage()`, `.subset_omics_list()` |
+| `analysis_helpers.R` | `.perform_continuous_analysis()`, `.perform_tte_analysis()`, `.perform_analysis()`, `.run_stratified_analysis()`, `.apply_multiple_testing_correction()`, `.add_filtered_bh_correction()` |
+| `reporting_helpers.R` | `.generate_reports()`, `.create_pheno_data_report()`, `.create_omics_data_report()`, `.create_addx_covariate_report()`, `.create_analysis_sample_summary()`, `.create_continuous_outcome_report()`, `.create_tte_outcome_report()` |
+| `plotting_helpers.R` | `plot_qq()`, `plot_volcano()`, `generate_all_plots()` |
+
+---
+
+## Main Functions
 
 ### `FAST_outcome_WAS()`
 
-This is the analysis function. It:
-
-1. validates `omics_type`
-2. validates and subsets `pheno`
-3. validates and harmonizes `omics`
-4. loads DNAm probe manifests when `omics_type == "DNAm"`
-5. runs stratified `change` analysis
-6. runs stratified `level` analysis
-7. returns both result trees
-
-### `FAST_outcome_WAS_reports()`
-
-This is the reporting function. It runs the same validation and harmonization
-steps, then produces QC summaries instead of model fits.
-
-## Phenotype Contract
-
-`pheno` is one row per sample. Required columns are:
-
-- `SAMPLE_ID`
-- `SUBJECT_ID`
-- `FU`
-- `TREATMENT_GROUP`
-- `FEMALE`
-- one outcome schema:
-  - continuous: `OUTCOME`
-  - TTE: `OUTCOME_TIME`, `OUTCOME_STATUS`
-
-Additional covariates are optional, but if they are named in
-`additional_covariates` they must exist in `pheno`.
-
-### Follow-up Encoding
-
-`FU` must satisfy all of the following:
-
-- integer-valued after coercion
-- non-negative
-- contain baseline `0`
-- contain at least one nonzero follow-up, and specifically `1`
-- be consecutive integers from `0` through `max(FU)`
-
-That means raw visit encodings like `0, 3, 6, 12` must be recoded to
-`0, 1, 2, 3` before running the package.
-
-The requirement that `FU == 1` exists is intentional. The first follow-up is
-treated as the minimum valid longitudinal structure for OutcomeWAS.
-
-## Outcome-Type Detection
-
-Outcome type is inferred automatically in `.detect_outcome_type()`:
-
-- `OUTCOME` only: continuous
-- `OUTCOME_TIME` + `OUTCOME_STATUS`: TTE
-- both schemas present: error
-- incomplete TTE schema: error
-- neither schema present: error
-
-There is no explicit `outcome_type` argument in the public API.
-
-## Validation Flow
-
-`FAST_outcome_WAS()` and `FAST_outcome_WAS_reports()` both call the same
-validation stack.
-
-### 1. `omics_type` validation
-
-Accepted values are:
-
-- `DNAm`
-- `Proteomics`
-- `Metabolomics`
-
-This also prints a reminder message about expected input scale.
-
-### 2. Phenotype validation
-
-`.validate_pheno()` performs the following checks and transformations.
-
-#### Core column checks
-
-- confirms `pheno` is a `data.frame` or matrix
-- checks all required columns exist
-- checks `additional_covariates` is `NULL` or character
-
-#### Binary field checks
-
-- `FEMALE` must contain only `0/1`
-- `TREATMENT_GROUP` must contain only `0/1`
-- both treatment arms must be present somewhere in the dataset
-
-Both fields are converted to factors if they are not already factors.
-
-#### Sample uniqueness and replicate handling
-
-- `SAMPLE_ID` must be unique globally
-- duplicated `SUBJECT_ID/FU` pairs are not fatal
-- if duplicated `SUBJECT_ID/FU` pairs are found, only the first occurrence is
-  kept and a warning is emitted
-
-This means technical replicates at the same visit are silently reduced to the
-first row after warning. That behavior is inherited from the scaffold and is
-worth keeping in mind.
-
-#### Outcome validation
-
-For continuous outcomes:
-
-- `OUTCOME` must be numeric
-
-For TTE outcomes:
-
-- `OUTCOME_TIME` must be numeric
-- `OUTCOME_TIME >= 0`
-- `OUTCOME_STATUS` must be binary `0/1`
-- `OUTCOME_STATUS` is coerced to integer
-
-#### Missing covariates and missing outcomes
-
-For each additional covariate:
-
-- rows with missing values are dropped at the sample level
-- a message is emitted with the number of dropped samples
-
-For outcome fields:
-
-- rows with missing or incomplete outcome data are dropped
-- the message reports the number of dropped samples
-
-The intent is to be strict and visible rather than allowing partner sites to
-run partially missing outcome data without noticing.
-
-#### Subject-level constancy
-
-The following columns must be constant within `SUBJECT_ID`:
-
-- `TREATMENT_GROUP`
-- `FEMALE`
-- `OUTCOME`, or `OUTCOME_TIME` and `OUTCOME_STATUS`
-
-If not, validation stops.
-
-This reflects the OutcomeWAS assumption that the outcome is subject-level and
-shared across the person’s analyte rows.
-
-#### Baseline/follow-up completeness
-
-Subjects are retained if and only if they have:
-
-- at least one baseline row (`FU == 0`)
-- at least one nonzero follow-up row
-
-Subjects missing either side are dropped with a message.
-
-This is a dataset-level screen. Later, during analysis, each FU-specific model
-uses the subset of subjects who have both baseline and that specific FU.
-
-#### Sex-specific subsets
-
-The validator returns:
-
-- `all`
-- `male`
-- `female`
-
-If the dataset contains only one sex, male/female subsets are returned as
-`NULL` and a warning is emitted.
-
-### 3. Omics validation
-
-`.validate_omics()` expects:
-
-- an `ANALYTE_NAME` column
-- all other columns numeric
-- column names matching `pheno$SAMPLE_ID`
-
-It then:
-
-- intersects omics columns with phenotype sample IDs
-- reports counts of shared / omics-only / pheno-only samples
-- warns if any analytes contain missing values
-- warns if any analytes have near-zero variance
-- returns aligned omics for `all`, `male`, and `female`
-
-No analytes are dropped for NA or low variance at validation time.
-
-### 4. DNAm-specific validation
-
-If `omics_type == "DNAm"`:
-
-- `Data/FAST_epicv1_epicv2_probe_list.rds` is loaded as the full probe list
-- `Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds` is loaded as the
-  filtered probe list
-- coverage against both lists is checked and reported
-- the omics table is subset to probes in the full probe list
-
-The filtered probe list is used later only for the additional filtered BH
-correction column.
-
-## Analysis Design
-
-### Overall structure
-
-The analysis is run twice:
-
-- `response_type = "change"`
-- `response_type = "level"`
-
-For each response type, `.run_stratified_analysis()` runs:
-
-- `all`
-- `male`
-- `female`
-
-For each stratum, `.perform_analysis()` loops over every nonzero follow-up
-level and fits a separate set of analyte-wise models.
-
-### FU-specific subject inclusion
-
-For a given FU level `k`, the model includes a subject if that subject has:
-
-- one baseline row
-- one row at FU `k`
-
-The subject does **not** need to have all intermediate follow-ups. For
-example, a subject with FU0 and FU2 but no FU1 is eligible for the FU2 model.
-
-### Analysis dataset construction
-
-For a given stratum and FU:
-
-1. `pheno_baseline_all` is defined as all baseline rows in that stratum
-2. `pheno_analysis` is defined as rows for the target FU
-3. subjects present in both are intersected
-4. baseline omics values are matched by `SUBJECT_ID`
-5. a model frame is built with:
-   - outcome columns from the FU row
-   - `analyte_baseline`
-   - `analyte`
-   - `TREATMENT_GROUP`
-   - `FEMALE`
-   - additional covariates
-
-The package uses the FU-row covariates, not baseline covariates. The intended
-use is that these are effectively constant subject-level variables, but the
-implementation takes them from the analysis row.
-
-### `change` versus `level`
-
-For each analyte:
-
-- `change`: `analyte = FU_value - baseline_value`
-- `level`: `analyte = FU_value`
-
-In both cases, `analyte_baseline` is included as a covariate.
-
-This is the direct analog of the TreatmentWAS baseline-adjusted formulation.
-
-## Model Formulas
-
-The model builder always starts with:
-
-- analyte term of interest: `analyte`
-- baseline adjustment: `analyte_baseline`
-- trial adjustment: `TREATMENT_GROUP`
-- sex adjustment in pooled analyses: `FEMALE`
-- optional user-provided covariates
-
-Before fitting, `.drop_uninformative_covariates()` removes any adjustment term
-with only one observed value in the current stratum/FU. This matters most for:
-
-- `FEMALE` in sex-stratified analyses
-- covariates that are constant within a sex stratum or FU subset
-
-### Continuous outcome
-
-The fitted model is:
+File: `main.R`
 
 ```r
-OUTCOME ~ analyte + analyte_baseline + TREATMENT_GROUP + FEMALE + [additional covariates]
+FAST_outcome_WAS <- function(pheno,
+                             omics,
+                             omics_type = "Proteomics",
+                             additional_covariates = NULL,
+                             n_cores = NULL,
+                             checkpoint_dir = NULL,
+                             checkpoint_batch_size = 2000L)
 ```
 
-using `lm()`.
+What it does:
 
-### Time-to-event outcome
+1. Resolves `n_cores`; defaults to `max(1, parallel::detectCores() - 1)`.
+2. Sets a `future` plan for analyte-level parallelization and restores the
+   previous plan on exit.
+3. Validates `omics_type`.
+4. Validates `pheno`, detects outcome type, and creates sex-specific subsets.
+5. Validates and aligns `omics` to the retained phenotype samples.
+6. For DNAm, loads probe lists, checks coverage, and subsets to the full probe
+   list.
+7. Runs stratified `change` analysis.
+8. Runs stratified `level` analysis.
+9. Returns both result trees.
 
-The fitted model is:
-
-```r
-survival::Surv(OUTCOME_TIME, OUTCOME_STATUS) ~ analyte + analyte_baseline + TREATMENT_GROUP + FEMALE + [additional covariates]
-```
-
-using `survival::coxph(..., ties = "efron")`.
-
-If a stratum/FU has zero events, that FU-specific analysis returns `NULL` for
-that stratum with a warning.
-
-At the analyte level, any fit failure also returns `NULL` for that analyte and
-emits a warning. Common reasons would be non-estimable coefficients or Cox
-instability.
-
-## Parallelism and Checkpointing
-
-Within each FU/stratum, analytes are split into batches. For each batch:
-
-- analyte-wise work is parallelized with `furrr::future_map()`
-- `n_cores > 1` uses a `future::multisession` plan
-- `n_cores == 1` uses `future::sequential`
-
-Checkpointing is optional. If `checkpoint_dir` is provided, batch files are
-written under:
-
-```text
-{checkpoint_dir}/{response_type}/{stratum}/FU{k}/batch_{b}.rds
-```
-
-This makes checkpoint reuse FU-specific.
-
-## Output Objects
-
-`FAST_outcome_WAS()` returns:
+Return shape:
 
 ```r
 list(
@@ -359,95 +128,441 @@ list(
 )
 ```
 
-Each non-`NULL` stratum contains:
+### `FAST_outcome_WAS_reports()`
 
-- `coefficients`
-- `outcome_effects`
+File: `main.R`
 
-### `coefficients`
+```r
+FAST_outcome_WAS_reports <- function(pheno,
+                                     omics,
+                                     omics_type = "Proteomics",
+                                     additional_covariates = NULL)
+```
 
-This is one row per analyte, per FU, per model term. Core columns are:
+What it does:
 
-- `ANALYTE_NAME`
-- `FU`
-- `COEFFICIENT`
-- `N_OBS`
-- `EFFECT_SIZE`
-- `SE`
-- `P_VALUE`
-- `BH_P_VALUE`
+1. Runs the same validation and harmonization stack as `FAST_outcome_WAS()`.
+2. Applies the same DNAm probe-list handling when `omics_type == "DNAm"`.
+3. Calls `.generate_reports()`.
+4. Returns QC summaries and outcome summaries.
 
-TTE runs also include:
+Reports and analysis are intentionally separate. Reports are cheap and
+descriptive; model fitting can be long-running, parallelized, and checkpointed.
 
-- `N_EVENTS`
-- `HAZARD_RATIO`
+---
 
-DNAm runs also include:
+## Accepted Inputs
 
-- `BH_P_VALUE_FILTERED`
+The full user-facing input/output contract is in `INPUTS_OUTPUTS.md`. This
+section records the implementation contract.
 
-`EFFECT_SIZE` is:
+### Phenotype Data
 
-- the linear-model coefficient for continuous outcomes
-- the log-hazard ratio for TTE outcomes
+`pheno` must be a `data.frame` or matrix with one row per sample.
 
-### `outcome_effects`
+Required columns:
 
-This is one row per analyte per FU, keeping only the analyte term from the full
-coefficient table. Core columns are:
+| Column | Requirement |
+|:---|:---|
+| `SAMPLE_ID` | Globally unique sample ID |
+| `SUBJECT_ID` | Subject ID repeated across visits |
+| `FU` | Integer-valued visit index; consecutive from `0`; must include `0` and `1` |
+| `TREATMENT_GROUP` | Binary `0/1`; both treatment arms must be present |
+| `FEMALE` | Binary `0/1` |
 
-- `ANALYTE_NAME`
-- `FU`
-- `EFFECT_SIZE`
-- `SE`
-- `P_VALUE`
-- `BH_P_VALUE`
+Exactly one outcome schema must be present:
 
-TTE runs also include:
+| Outcome type | Required columns |
+|:---|:---|
+| Continuous | `OUTCOME` |
+| Time-to-event | `OUTCOME_TIME`, `OUTCOME_STATUS`; `OUTCOME_TIME` is assumed to be measured in years |
 
-- `HAZARD_RATIO`
+Additional covariates are optional. If supplied, each named column must exist
+and be numeric, factor, or logical.
 
-DNAm runs also include:
+### Omics Data
 
-- `BH_P_VALUE_FILTERED`
+`omics` must be a data frame with:
 
-The point of `outcome_effects` is to provide the compact analyte-level summary
-table that most downstream users will inspect first.
+| Column | Requirement |
+|:---|:---|
+| `ANALYTE_NAME` | One feature identifier per row |
+| Sample columns | Numeric columns named by `pheno$SAMPLE_ID` |
+
+Extra omics samples and extra phenotype samples are allowed. The validator
+intersects them and reports sample counts.
+
+### Omics Type
+
+Accepted values:
+
+- `Proteomics`
+- `Metabolomics`
+- `DNAm`
+
+DNAm triggers probe-list loading, probe coverage checks, full-probe-list
+subsetting, and filtered-probe BH correction.
+
+---
+
+## Validation Flow
+
+`FAST_outcome_WAS()` and `FAST_outcome_WAS_reports()` call the same validation
+stack.
+
+### Outcome Type Detection
+
+Function: `.detect_outcome_type()`
+
+| Columns present | Result |
+|:---|:---|
+| `OUTCOME` only | continuous |
+| `OUTCOME_TIME` and `OUTCOME_STATUS` only | time-to-event |
+| both schemas | error |
+| incomplete time-to-event schema | error |
+| no outcome schema | error |
+
+There is no public `outcome_type` argument. The schema determines the model
+family.
+
+### Omics Type Validation
+
+Function: `.validate_omics_type()`
+
+- Enforces the accepted `omics_type` values.
+- Prints preprocessing reminders, such as DNAm M-values and log2-transformed
+  Proteomics/Metabolomics.
+
+### Phenotype Validation
+
+Function: `.validate_pheno()`
+
+Core checks:
+
+- Confirms `pheno` is a `data.frame` or matrix.
+- Checks all required columns.
+- Checks `additional_covariates` is `NULL` or character.
+- Converts `FU`, `TREATMENT_GROUP`, and `FEMALE` to factors when needed.
+
+Follow-up checks:
+
+- `FU` must be integer-valued after coercion.
+- `FU` must be non-negative.
+- `FU == 0` must exist.
+- `FU == 1` must exist.
+- FU levels must be consecutive integers from `0` through `max(FU)`.
+
+Binary field checks:
+
+- `FEMALE` must contain only `0/1`.
+- `TREATMENT_GROUP` must contain only `0/1`.
+- Both treatment arms must be present.
+
+Duplicate handling:
+
+- `SAMPLE_ID` must be unique globally.
+- Duplicate `SUBJECT_ID/FU` pairs are not fatal.
+- If duplicates exist, only the first row is kept and a warning is emitted.
+
+Outcome checks:
+
+| Outcome type | Checks |
+|:---|:---|
+| Continuous | `OUTCOME` must be numeric |
+| Time-to-event | `OUTCOME_TIME` must be numeric and non-negative; validation warns that it is assumed to be measured in years; `OUTCOME_STATUS` must be binary `0/1` and is coerced to integer |
+
+Missing-data behavior:
+
+- Samples missing any requested additional covariate are dropped.
+- Samples missing required outcome data are dropped.
+- Dropped sample counts are reported by messages.
+
+Subject-level constancy:
+
+- `TREATMENT_GROUP` must be constant within `SUBJECT_ID`.
+- `FEMALE` must be constant within `SUBJECT_ID`.
+- Outcome values must be constant within `SUBJECT_ID`.
+
+Subject retention:
+
+- A subject must have at least one baseline row (`FU == 0`).
+- A subject must have at least one nonzero follow-up row.
+- This is a dataset-level screen; FU-specific inclusion happens later.
+
+Sex strata:
+
+- The validator returns `all`, `male`, and `female`.
+- If the dataset is single-sex, both sex-specific subsets are set to `NULL`.
+
+### Omics Validation
+
+Function: `.validate_omics()`
+
+- Requires `ANALYTE_NAME`.
+- Requires all measurement columns to be numeric.
+- Intersects omics sample columns with retained phenotype sample IDs.
+- Reports shared, omics-only, and pheno-only sample counts.
+- Warns on analytes with missing values.
+- Warns on analytes with near-zero variance.
+- Does not drop analytes for missingness or low variance at validation time.
+- Returns aligned omics tables for `all`, `male`, and `female`.
+
+### DNAm Validation
+
+Functions: `.validate_dnam_probe_coverage()`, `.subset_omics_list()`
+
+For DNAm:
+
+1. `Data/FAST_epicv1_epicv2_probe_list.rds` is loaded as the full probe list.
+2. `Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds` is loaded as the
+   filtered probe list.
+3. Coverage against both lists is checked and reported.
+4. Omics tables are subset to probes in the full probe list.
+5. The filtered probe list is retained for `BH_P_VALUE_FILTERED`.
+
+---
+
+## High-Level Pipeline Flow
+
+```text
+FAST_outcome_WAS()
+|
+|-- resolve n_cores
+|-- set future::plan()
+|-- .validate_omics_type()
+|-- .validate_pheno()       -> pheno_list
+|-- .validate_omics()       -> omics_list
+|
+|-- [DNAm] load probe lists, validate coverage, subset omics_list
+|
+|-- .run_stratified_analysis(response_type = "change")
+|     |-- all
+|     |-- male
+|     `-- female
+|
+`-- .run_stratified_analysis(response_type = "level")
+      |-- all
+      |-- male
+      `-- female
+
+FAST_outcome_WAS_reports()
+|
+|-- same validation and DNAm setup
+`-- .generate_reports()
+```
+
+---
+
+## Analysis Design
+
+OutcomeWAS runs a separate model set for every nonzero follow-up. If a dataset
+contains `FU = 0, 1, 2`, there is one model set for baseline-to-FU1 and another
+for baseline-to-FU2.
+
+The analysis dimensions are:
+
+| Dimension | Values |
+|:---|:---|
+| response type | `change`, `level` |
+| stratum | `all`, `male`, `female` |
+| follow-up | every nonzero `FU` |
+| analyte | every retained row of `omics` |
+
+### FU-Specific Subject Inclusion
+
+For a given follow-up `FU = k`, a subject is included only if they have:
+
+- one retained baseline row at `FU == 0`
+- one retained follow-up row at `FU == k`
+
+The subject does not need all intermediate visits. A subject with FU0 and FU2
+but no FU1 is eligible for the FU2 model.
+
+### Analysis Dataset Construction
+
+For each stratum and follow-up:
+
+1. `pheno_baseline_all` is all baseline rows in the stratum.
+2. `pheno_analysis` is all rows for the target follow-up.
+3. Subjects present in both are intersected.
+4. Baseline omics values are matched by `SUBJECT_ID`.
+5. A model frame is built with the outcome, analyte values, treatment, sex, and
+   requested covariates.
+
+The implementation takes `TREATMENT_GROUP`, `FEMALE`, and additional covariates
+from the follow-up analysis row. The intended use is that these are effectively
+subject-level covariates, but they are not explicitly frozen at baseline.
+
+### Change Versus Level
+
+For each analyte and FU-specific subject:
+
+| Analysis | `analyte` term |
+|:---|:---|
+| `analysis_change` | `FU_value - baseline_value` |
+| `analysis_level` | `FU_value` |
+
+Both include `analyte_baseline = baseline_value` as an adjustment covariate.
+
+---
+
+## Model Formulas
+
+The model builder starts with:
+
+- analyte term of interest: `analyte`
+- baseline analyte adjustment: `analyte_baseline`
+- trial adjustment: `TREATMENT_GROUP`
+- sex adjustment: `FEMALE`
+- optional user-provided covariates
+
+Before fitting, `.drop_uninformative_covariates()` removes adjustment terms with
+only one observed value in the current stratum/FU model frame. This usually
+drops `FEMALE` in sex-stratified analyses.
+
+### Continuous Outcome
+
+Function: `.perform_continuous_analysis()`
+
+Model:
+
+```r
+OUTCOME ~ analyte + analyte_baseline + TREATMENT_GROUP + FEMALE + [additional covariates]
+```
+
+Fit method:
+
+```r
+lm(...)
+```
+
+Output:
+
+- `coefficients`: all rows from `summary(fit)$coefficients`
+- `outcome_effects`: the `analyte` coefficient only
+
+### Time-to-Event Outcome
+
+Function: `.perform_tte_analysis()`
+
+Model:
+
+```r
+survival::Surv(OUTCOME_TIME, OUTCOME_STATUS) ~
+  analyte + analyte_baseline + TREATMENT_GROUP + FEMALE + [additional covariates]
+```
+
+Fit method:
+
+```r
+survival::coxph(..., ties = "efron")
+```
+
+Output:
+
+- `coefficients`: all rows from `summary(fit)$coefficients`
+- `outcome_effects`: the `analyte` coefficient only
+- `HAZARD_RATIO`: `exp(EFFECT_SIZE)`
+- `N_EVENTS`: number of events in the fitted model
+
+Failure behavior:
+
+- If a stratum/FU has zero events, the entire FU-specific model set is skipped
+  for that stratum.
+- If an individual analyte fit fails, that analyte returns `NULL`, emits a
+  warning, and is omitted from the final bound table.
+
+---
+
+## Parallelization and Checkpointing
+
+Parallelization is configured in `FAST_outcome_WAS()`:
+
+| `n_cores` | future plan |
+|:---|:---|
+| `1` | `future::sequential` |
+| `> 1` | `future::multisession` |
+
+Within each response type, stratum, and follow-up:
+
+1. Analytes are split into batches of `checkpoint_batch_size`.
+2. Each batch is processed with `furrr::future_map()`.
+3. If checkpointing is enabled, each completed batch is saved as an `.rds`.
+4. After all batches finish, non-`NULL` analyte results are row-bound.
+
+Checkpoint path:
+
+```text
+{checkpoint_dir}/{response_type}/{stratum}/FU{k}/batch_{b}.rds
+```
+
+Example:
+
+```text
+checkpoints/change/all/FU1/batch_1.rds
+checkpoints/change/all/FU2/batch_1.rds
+checkpoints/level/female/FU1/batch_3.rds
+```
+
+Checkpoint reuse is FU-specific. A rerun with the same checkpoint directory
+loads completed batch files and skips recomputation.
+
+Important assumption:
+
+- Checkpoints are tied to analyte ordering and `checkpoint_batch_size`.
+- Do not change the omics data or batch size between a run and resume.
+
+---
 
 ## Multiple Testing Correction
 
-The grouping for BH correction is part of the statistical definition and is
-important.
+Function: `.apply_multiple_testing_correction()`
 
-### `coefficients`
+Benjamini-Hochberg correction is applied after all batches for a stratum and
+response type are assembled.
 
-`BH_P_VALUE` is computed separately within each:
+| Output table | BH grouping |
+|:---|:---|
+| `coefficients` | within each `FU x COEFFICIENT` |
+| `outcome_effects` | within each `FU` |
 
-- `FU`
-- `COEFFICIENT`
+This means, for example, that analyte effects at FU1 are corrected separately
+from analyte effects at FU2, and separately from baseline or treatment
+adjustment terms in the full coefficient table.
 
-That means the analyte term at FU1 is corrected separately from the analyte
-term at FU2, and separately from the baseline or treatment adjustment terms.
+---
 
-### `outcome_effects`
+## DNAm Probe Sets
 
-`BH_P_VALUE` is computed separately within each:
+DNAm-specific behavior is split across `main.R` and `analysis_helpers.R`.
 
-- `FU`
+In `main.R`:
 
-Since `outcome_effects` contains only the analyte term, no coefficient-name
-stratification is needed there.
+1. Load full and filtered probe lists from `Data/`.
+2. Validate overlap between incoming omics probes and both reference lists.
+3. Subset the omics tables to the full probe list.
 
-### DNAm filtered correction
+In `analysis_helpers.R`:
 
-For DNAm only, `BH_P_VALUE_FILTERED` is added:
+1. Fit models on the full retained probe set.
+2. Add `BH_P_VALUE_FILTERED` for analytes in the filtered probe list.
+3. Leave `BH_P_VALUE_FILTERED` as `NA` outside the filtered set.
 
-- on `coefficients`, separately within `FU x COEFFICIENT`
-- on `outcome_effects`, separately within `FU`
+Filtered BH grouping:
 
-but only for analytes in the filtered probe list.
+| Output table | Filtered BH grouping |
+|:---|:---|
+| `coefficients` | within each `FU x COEFFICIENT` |
+| `outcome_effects` | within each `FU` |
 
-## Reporting Objects
+This allows full-set and filtered-set significance thresholds to be compared
+without refitting models.
+
+---
+
+## Reporting Pipeline
+
+Function: `.generate_reports()`
 
 `FAST_outcome_WAS_reports()` returns:
 
@@ -459,104 +574,146 @@ list(
 )
 ```
 
+Reports are descriptive and independent of response type.
+
 ### `pheno_summary`
 
-This is a simple count table by `FU` and `FEMALE`, with:
+Function: `.create_pheno_data_report()`
 
-- `N_SUBJECTS`
-- `N_CONTROL`
-- `N_TREATMENT`
-- `N_SAMPLES`
+One row per `FU x FEMALE` cell:
+
+| Column | Meaning |
+|:---|:---|
+| `FU` | Follow-up level |
+| `FEMALE` | Sex indicator |
+| `N_SUBJECTS` | Unique subjects in the cell |
+| `N_CONTROL` | Unique control subjects in the cell |
+| `N_TREATMENT` | Unique treatment subjects in the cell |
+| `N_SAMPLES` | Raw sample-row count |
 
 ### `variable_summaries`
 
-This is returned separately for `all`, `male`, and `female`.
+Built separately for `all`, `male`, and `female`.
 
-Within each stratum, summaries are keyed by `FU` and treatment arm:
+Within each stratum, summaries are keyed by observed `FU x TREATMENT_GROUP`
+cells:
 
-- `omics_FU0_Tx0`
-- `omics_FU2_Tx1`
-- `covariates_FU1_Tx0`
-- etc.
+```r
+reports$variable_summaries$all$omics_FU0_Tx0
+reports$variable_summaries$all$omics_FU1_Tx1
+reports$variable_summaries$all$covariates_FU0_Tx0
+```
 
-Each omics entry is one row per analyte with non-missing count and summary
-statistics. Each covariate entry is one row per named covariate with a compact
-typed summary.
+Omics summaries contain:
+
+- `ANALYTE_NAME`
+- `N_NONMISSING`
+- `MEAN`
+- `MEDIAN`
+- `SD`
+- `MIN`
+- `MAX`
+
+Covariate summaries contain:
+
+- `COVARIATE_NAME`
+- `TYPE`
+- `N_NA`
+- `SUMMARY`
 
 ### `outcome_reports`
 
-This contains:
+Contains:
 
 - `outcome_type`
 - `analysis_sample_summary`
 - `outcome_summary`
 
-#### `analysis_sample_summary`
+`analysis_sample_summary` has one row per nonzero FU:
 
-This is one row per nonzero FU with:
+| Column | Meaning |
+|:---|:---|
+| `FU` | Follow-up level |
+| `N_SUBJECTS` | Subjects with both baseline and this FU |
+| `N_BASELINE_SAMPLES` | Baseline samples contributing to this FU-specific model set |
+| `N_FOLLOWUP_SAMPLES` | Follow-up samples contributing to this FU-specific model set |
 
-- `FU`
-- `N_SUBJECTS`
-- `N_BASELINE_SAMPLES`
-- `N_FOLLOWUP_SAMPLES`
+`outcome_summary` is built from a deduplicated one-row-per-subject frame so
+repeated follow-up rows do not double-count subject-level outcomes.
 
-This table describes the eligible sample size for each FU-specific model set.
-
-#### `outcome_summary`
-
-Because the outcome is subject-level, this summary is built from a deduplicated
-one-row-per-subject frame, not from all longitudinal rows. Without that step,
-subjects with more follow-up rows would be over-counted.
-
-For continuous outcomes, the table reports summary statistics for:
+For continuous outcomes, groups are:
 
 - `all`
 - `control`
 - `treatment`
 
-For TTE outcomes, it reports:
+For time-to-event outcomes, the summary includes subject counts, event counts,
+censoring counts, event rate, and follow-up-time summaries.
 
-- subject counts
-- event counts
-- censoring counts
-- event rate
-- summary statistics of follow-up time
+---
 
-## Testing
+## Results Output
 
-`test_comprehensive.R` currently covers:
+### Analysis Results
 
-- single-FU continuous + non-DNAm
-- single-FU TTE + non-DNAm
-- multi-FU continuous + non-DNAm
-- multi-FU TTE + non-DNAm
-- multi-FU continuous + DNAm
-- multi-FU TTE + DNAm
+`FAST_outcome_WAS()` returns:
 
-The tests verify:
+```r
+results$analysis_change$all
+results$analysis_change$male
+results$analysis_change$female
 
-- top-level result structure
-- presence and correctness of `FU` columns
-- sex-stratified result trees
-- TTE hazard-ratio columns
-- DNAm filtered BH columns
-- report structure
-- exact consistency between `outcome_effects` and the analyte rows of
-  `coefficients`
+results$analysis_level$all
+results$analysis_level$male
+results$analysis_level$female
+```
 
-## Current Limitations and Open Points
+Each non-`NULL` stratum contains:
 
-- Outcome type is inferred only from the canonical column names. There is no
-  aliasing layer.
-- The pipeline assumes the outcome is constant within subject across visits.
-- Covariates are taken from the FU row rather than being explicitly frozen at
-  baseline.
-- Duplicate `SUBJECT_ID/FU` rows are handled by keeping the first row after a
-  warning, rather than requiring the user to resolve them upstream.
-- There is no explicit minimum-event threshold for Cox models beyond the
-  stratum/FU-level zero-event guard.
-- Subjects contribute independently to each FU-specific model if they have the
-  required baseline/FU pair.
+```r
+list(
+  coefficients = data.frame(...),
+  outcome_effects = data.frame(...)
+)
+```
 
-Those are the main implementation decisions to review if we want to tighten the
-spec further.
+`coefficients` columns:
+
+- `ANALYTE_NAME`
+- `FU`
+- `COEFFICIENT`
+- `N_OBS`
+- `EFFECT_SIZE`
+- `SE`
+- `P_VALUE`
+- `BH_P_VALUE`
+- `N_EVENTS` for time-to-event outcomes
+- `HAZARD_RATIO` for time-to-event outcomes
+- `BH_P_VALUE_FILTERED` for DNAm
+
+`outcome_effects` columns:
+
+- `ANALYTE_NAME`
+- `FU`
+- `EFFECT_SIZE`
+- `SE`
+- `P_VALUE`
+- `BH_P_VALUE`
+- `HAZARD_RATIO` for time-to-event outcomes
+- `BH_P_VALUE_FILTERED` for DNAm
+
+`outcome_effects` should match the `COEFFICIENT == "analyte"` rows from
+`coefficients`, with only the compact analyte-effect columns retained.
+
+### Report Results
+
+`FAST_outcome_WAS_reports()` returns:
+
+```r
+reports$pheno_summary
+reports$variable_summaries
+reports$outcome_reports
+```
+
+The report object is intended to describe input data and outcome availability;
+it does not contain model results.

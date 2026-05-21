@@ -52,7 +52,7 @@ Outcome columns must follow exactly one of these two schemas:
 | Outcome type | Required columns | Requirement |
 |:---|:---|:---|
 | Continuous | `OUTCOME` | Numeric; constant within each `SUBJECT_ID` |
-| Time-to-event | `OUTCOME_TIME`, `OUTCOME_STATUS` | `OUTCOME_TIME` is numeric and non-negative; `OUTCOME_STATUS` is binary `0/1`; both are constant within each `SUBJECT_ID` |
+| Time-to-event | `OUTCOME_TIME`, `OUTCOME_STATUS` | `OUTCOME_TIME` is numeric, non-negative, and measured in years; `OUTCOME_STATUS` is binary `0/1`; both are constant within each `SUBJECT_ID` |
 
 Optional additional covariates:
 
@@ -74,7 +74,7 @@ s005       subj_03     0   1                0       15.0     48     26.2
 s006       subj_03     2   1                0       15.0     48     26.4
 ```
 
-Example time-to-event outcome columns:
+Example time-to-event outcome columns, with time measured in years:
 
 ```text
 SUBJECT_ID  OUTCOME_TIME  OUTCOME_STATUS
@@ -405,6 +405,8 @@ Time-to-event outcome summary columns:
 - Invalid required columns or invalid field types stop the run.
 - Non-consecutive `FU` encoding stops the run.
 - Non-constant within-subject outcome, sex, or treatment stops the run.
+- Time-to-event validation warns that `OUTCOME_TIME` is assumed to be measured
+  in years.
 - Analyte-level model failures are omitted from the final result tables, with
   warnings.
 - Time-to-event follow-up/stratum combinations with zero events are skipped,
