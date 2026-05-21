@@ -1,4 +1,5 @@
 .git.inherited-backup/
+*.html
 Figures/
 TreatmentWAS-05-18/
 PracticeData/
