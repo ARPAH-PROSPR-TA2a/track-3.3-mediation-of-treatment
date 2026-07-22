@@ -232,6 +232,8 @@ Function: `.validate_omics_type()`
 - Enforces the accepted `omics_type` values.
 - Prints preprocessing reminders, such as DNAm M-values and log2-transformed
   Proteomics/Metabolomics.
+- Accepts `"other"` for non-omics analytes without printing a preprocessing
+  reminder.
 
 ### Phenotype Validation
 

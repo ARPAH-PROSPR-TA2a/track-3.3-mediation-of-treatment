@@ -124,9 +124,10 @@ Sample matching:
 ### Other Input Arguments
 
 - `omics_type`: Character string indicating the data type. Must be one of
-  `"Proteomics"`, `"Metabolomics"`, or `"DNAm"`. DNAm runs also check
-  probe-list coverage, subset to the full probe list, and add a filtered-probe
-  BH correction column.
+  `"Proteomics"`, `"Metabolomics"`, `"DNAm"`, or `"other"`. Use `"other"`
+  for non-omics analytes; it does not emit a preprocessing reminder. DNAm runs
+  also check probe-list coverage, subset to the full probe list, and add a
+  filtered-probe BH correction column.
 - `additional_covariates`: Optional character vector naming extra phenotype
   columns to include as model covariates. These covariates are taken from the
   follow-up row used for each analysis.

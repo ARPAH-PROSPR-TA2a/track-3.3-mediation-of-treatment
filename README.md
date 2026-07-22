@@ -72,7 +72,8 @@ head(results$analysis_level$all$outcome_effects)
 - **`omics`** (`data.frame`): Omics data with one row per analyte and one
   column per sample. See [Data Format Requirements](#data-format-requirements).
 - **`omics_type`** (`character`): Type of omics data being analyzed. Options:
-  `"Proteomics"`, `"Metabolomics"`, `"DNAm"`. Default: `"Proteomics"`.
+  `"Proteomics"`, `"Metabolomics"`, `"DNAm"`, or `"other"` for non-omics
+  analytes. Default: `"Proteomics"`.
 - **`additional_covariates`** (`character` vector, optional): Phenotype columns
   to include as additional model covariates. These columns must be numeric,
   factor, or logical.
