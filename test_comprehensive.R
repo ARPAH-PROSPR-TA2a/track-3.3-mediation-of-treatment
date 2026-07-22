@@ -12,6 +12,30 @@ run_checks <- function(checks) {
 }
 
 
+# =============================================================================
+# OMICS TYPE VALIDATION
+# =============================================================================
+
+other_omics_output <- capture.output(
+  other_omics_result <- .validate_omics_type("other"),
+  type = "message"
+)
+invalid_omics_errors <- tryCatch(
+  {
+    .validate_omics_type("invalid")
+    FALSE
+  },
+  error = function(e) TRUE
+)
+
+omics_type_validation_pass <- run_checks(list(
+  "Other omics type passes validation" = is.null(other_omics_result),
+  "Other omics type is silent" = length(other_omics_output) == 0L,
+  "Invalid omics type errors" = invalid_omics_errors
+))
+cat("\n")
+
+
 print_results_summary <- function(results, label = "") {
   if (label != "") cat(label, "\n", sep = "")
   if (!is.null(results$coefficients)) {
@@ -605,6 +629,7 @@ test6_pass <- test6_top_pass && test6_change_struct_pass && test6_level_struct_p
 cat("\n")
 cat("FINAL SUMMARY\n")
 cat("=============\n")
+cat("Omics type validation:                      ", if (omics_type_validation_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 1 (Single-FU continuous + non-DNAm): ", if (test1_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 2 (Single-FU TTE + non-DNAm):        ", if (test2_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 3 (Multi-FU continuous + non-DNAm):  ", if (test3_pass) "PASS" else "FAIL", "\n", sep = "")
@@ -612,7 +637,8 @@ cat("Test 4 (Multi-FU TTE + non-DNAm):         ", if (test4_pass) "PASS" else "F
 cat("Test 5 (Multi-FU continuous + DNAm):      ", if (test5_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 6 (Multi-FU TTE + DNAm):             ", if (test6_pass) "PASS" else "FAIL", "\n", sep = "")
 
-all_tests_pass <- all(test1_pass, test2_pass, test3_pass, test4_pass, test5_pass, test6_pass)
+all_tests_pass <- all(omics_type_validation_pass, test1_pass, test2_pass,
+                      test3_pass, test4_pass, test5_pass, test6_pass)
 cat("\nOverall: ", if (all_tests_pass) "ALL TESTS PASSED" else "SOME TESTS FAILED", "\n", sep = "")
 
 if (!all_tests_pass) {
