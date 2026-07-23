@@ -23,9 +23,8 @@ results <- FAST_outcome_WAS(...)
 reports <- FAST_outcome_WAS_reports(...)
 ```
 
-For compatibility with the repository's original layout, `source("main.R")`
-continues to load OutcomeWAS. New code should use the pipeline-specific entry
-point above.
+The repository root does not expose a default analysis entrypoint. Source the
+specific pipeline you intend to run.
 
 ## Tests
 
