@@ -32,7 +32,7 @@ pre {
 </style>
 
 This walkthrough documents the current behavior of the OutcomeWAS pipeline in
-`main.R` and helper files. The pipeline estimates `analyte -> outcome`
+`outcomewas/main.R` and its pipeline-local helper files. The pipeline estimates `analyte -> outcome`
 associations inside randomized trial datasets while retaining
 `TREATMENT_GROUP` as an adjustment covariate.
 
@@ -68,24 +68,29 @@ are handled as separate baseline-to-follow-up analyses for each nonzero `FU`.
 ## File Structure
 
 ```text
-main.R                       Public API: FAST_outcome_WAS(), FAST_outcome_WAS_reports()
-validation_helpers.R         Input validation and phenotype/omics harmonization
-analysis_helpers.R           Model fitting, FU looping, BH correction, checkpointing
-reporting_helpers.R          QC summaries and outcome reports
-plotting_helpers.R           QQ and volcano plots from outcome_effects
-test_comprehensive.R         Main regression suite
-test_parallel_checkpoint.R   Parallelization and checkpointing tests
+outcomewas/
+  main.R                     Public API: FAST_outcome_WAS(), FAST_outcome_WAS_reports()
+  R/
+    validation_helpers.R     Input validation and phenotype/omics harmonization
+    analysis_helpers.R       Model fitting, FU looping, BH correction, checkpointing
+    reporting_helpers.R      QC summaries and outcome reports
+    plotting_helpers.R       QQ and volcano plots from outcome_effects
+  Data/                      OutcomeWAS DNAm probe lists
+  Examples/                  Pipeline-specific example inputs, outputs, and scripts
+tests/outcomewas/
+  test_comprehensive.R       Main regression suite
+  test_parallel_checkpoint.R Parallelization and checkpointing tests
 ```
 
 Function locations:
 
 | File | Key functions |
 |:---|:---|
-| `main.R` | `FAST_outcome_WAS()`, `FAST_outcome_WAS_reports()` |
-| `validation_helpers.R` | `.detect_outcome_type()`, `.validate_omics_type()`, `.validate_pheno()`, `.validate_omics()`, `.validate_dnam_probe_coverage()`, `.subset_omics_list()` |
-| `analysis_helpers.R` | `.perform_continuous_analysis()`, `.perform_tte_analysis()`, `.perform_analysis()`, `.run_stratified_analysis()`, `.apply_multiple_testing_correction()`, `.add_filtered_bh_correction()` |
-| `reporting_helpers.R` | `.generate_reports()`, `.create_pheno_data_report()`, `.create_omics_data_report()`, `.create_addx_covariate_report()`, `.create_analysis_sample_summary()`, `.create_continuous_outcome_report()`, `.create_tte_outcome_report()` |
-| `plotting_helpers.R` | `plot_qq()`, `plot_volcano()`, `generate_all_plots()` |
+| `outcomewas/main.R` | `FAST_outcome_WAS()`, `FAST_outcome_WAS_reports()` |
+| `outcomewas/R/validation_helpers.R` | `.detect_outcome_type()`, `.validate_omics_type()`, `.validate_pheno()`, `.validate_omics()`, `.validate_dnam_probe_coverage()`, `.subset_omics_list()` |
+| `outcomewas/R/analysis_helpers.R` | `.perform_continuous_analysis()`, `.perform_tte_analysis()`, `.perform_analysis()`, `.run_stratified_analysis()`, `.apply_multiple_testing_correction()`, `.add_filtered_bh_correction()` |
+| `outcomewas/R/reporting_helpers.R` | `.generate_reports()`, `.create_pheno_data_report()`, `.create_omics_data_report()`, `.create_addx_covariate_report()`, `.create_analysis_sample_summary()`, `.create_continuous_outcome_report()`, `.create_tte_outcome_report()` |
+| `outcomewas/R/plotting_helpers.R` | `plot_qq()`, `plot_volcano()`, `generate_all_plots()` |
 
 ---
 
@@ -93,7 +98,7 @@ Function locations:
 
 ### `FAST_outcome_WAS()`
 
-File: `main.R`
+File: `outcomewas/main.R`
 
 ```r
 FAST_outcome_WAS <- function(pheno,
@@ -130,7 +135,7 @@ list(
 
 ### `FAST_outcome_WAS_reports()`
 
-File: `main.R`
+File: `outcomewas/main.R`
 
 ```r
 FAST_outcome_WAS_reports <- function(pheno,
@@ -315,8 +320,8 @@ Functions: `.validate_dnam_probe_coverage()`, `.subset_omics_list()`
 
 For DNAm:
 
-1. `Data/FAST_epicv1_epicv2_probe_list.rds` is loaded as the full probe list.
-2. `Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds` is loaded as the
+1. `outcomewas/Data/FAST_epicv1_epicv2_probe_list.rds` is loaded as the full probe list.
+2. `outcomewas/Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds` is loaded as the
    filtered probe list.
 3. Coverage against both lists is checked and reported.
 4. Omics tables are subset to probes in the full probe list.
@@ -536,15 +541,16 @@ adjustment terms in the full coefficient table.
 
 ## DNAm Probe Sets
 
-DNAm-specific behavior is split across `main.R` and `analysis_helpers.R`.
+DNAm-specific behavior is split across `outcomewas/main.R` and
+`outcomewas/R/analysis_helpers.R`.
 
-In `main.R`:
+In `outcomewas/main.R`:
 
-1. Load full and filtered probe lists from `Data/`.
+1. Load full and filtered probe lists from `outcomewas/Data/`.
 2. Validate overlap between incoming omics probes and both reference lists.
 3. Subset the omics tables to the full probe list.
 
-In `analysis_helpers.R`:
+In `outcomewas/R/analysis_helpers.R`:
 
 1. Fit models on the full retained probe set.
 2. Add `BH_P_VALUE_FILTERED` for analytes in the filtered probe list.

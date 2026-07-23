@@ -1,13 +1,10 @@
-old_wd <- setwd("..")
-on.exit(setwd(old_wd), add = TRUE)
+source(file.path("outcomewas", "main.R"))
+source(file.path("outcomewas", "R", "plotting_helpers.R"))
 
-source("main.R")
-source("plotting_helpers.R")
-
-pheno <- readRDS("Examples/ExampleData/pheno_example.rds")
-omics <- readRDS("Examples/ExampleData/metabolomics_log2.rds")
-dir.create("Examples/ExampleResults", showWarnings = FALSE)
-figures_dir <- "Examples/ExampleFigures/Metabolomics"
+pheno <- readRDS("outcomewas/Examples/ExampleData/pheno_example.rds")
+omics <- readRDS("outcomewas/Examples/ExampleData/metabolomics_log2.rds")
+dir.create("outcomewas/Examples/ExampleResults", showWarnings = FALSE)
+figures_dir <- "outcomewas/Examples/ExampleFigures/Metabolomics"
 dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
 
 additional_covariates <- c("agebl", "agevis", "mbmi")
@@ -27,8 +24,8 @@ reports <- FAST_outcome_WAS_reports(
   additional_covariates = additional_covariates
 )
 
-saveRDS(results, "Examples/ExampleResults/metabolomics_results.rds")
-saveRDS(reports, "Examples/ExampleResults/metabolomics_reports.rds")
+saveRDS(results, "outcomewas/Examples/ExampleResults/metabolomics_results.rds")
+saveRDS(reports, "outcomewas/Examples/ExampleResults/metabolomics_reports.rds")
 
 generate_all_plots(results$analysis_change, figures_dir = file.path(figures_dir, "analysis_change"))
 generate_all_plots(results$analysis_level, figures_dir = file.path(figures_dir, "analysis_level"))
