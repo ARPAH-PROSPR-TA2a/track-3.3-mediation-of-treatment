@@ -1,6 +1,6 @@
-source("validation_helpers.R")
-source("reporting_helpers.R")
-source("analysis_helpers.R")
+source(file.path("outcomewas", "R", "validation_helpers.R"))
+source(file.path("outcomewas", "R", "reporting_helpers.R"))
+source(file.path("outcomewas", "R", "analysis_helpers.R"))
 
 FAST_outcome_WAS <- function(pheno,
                              omics,
@@ -37,8 +37,8 @@ FAST_outcome_WAS <- function(pheno,
 
   filtered_probes <- NULL
   if (omics_type == "DNAm") {
-    full_probes     <- readRDS("Data/FAST_epicv1_epicv2_probe_list.rds")
-    filtered_probes <- readRDS("Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
+    full_probes     <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_probe_list.rds")
+    filtered_probes <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
     .validate_dnam_probe_coverage(full_probes, filtered_probes, omics_list$all$ANALYTE_NAME)
     omics_list <- .subset_omics_list(omics_list, full_probes)
   }
@@ -85,8 +85,8 @@ FAST_outcome_WAS_reports <- function(pheno,
   omics_list <- .validate_omics(omics, pheno_list)
 
   if (omics_type == "DNAm") {
-    full_probes     <- readRDS("Data/FAST_epicv1_epicv2_probe_list.rds")
-    filtered_probes <- readRDS("Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
+    full_probes     <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_probe_list.rds")
+    filtered_probes <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
     .validate_dnam_probe_coverage(full_probes, filtered_probes, omics_list$all$ANALYTE_NAME)
     omics_list <- .subset_omics_list(omics_list, full_probes)
   }

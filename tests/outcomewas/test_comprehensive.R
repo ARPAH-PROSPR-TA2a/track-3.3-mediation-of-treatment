@@ -1,4 +1,4 @@
-source("main.R")
+source(file.path("outcomewas", "main.R"))
 
 
 run_checks <- function(checks) {
@@ -10,6 +10,30 @@ run_checks <- function(checks) {
   }
   all_pass
 }
+
+
+# =============================================================================
+# OMICS TYPE VALIDATION
+# =============================================================================
+
+other_omics_output <- capture.output(
+  other_omics_result <- .validate_omics_type("other"),
+  type = "message"
+)
+invalid_omics_errors <- tryCatch(
+  {
+    .validate_omics_type("invalid")
+    FALSE
+  },
+  error = function(e) TRUE
+)
+
+omics_type_validation_pass <- run_checks(list(
+  "Other omics type passes validation" = is.null(other_omics_result),
+  "Other omics type is silent" = length(other_omics_output) == 0L,
+  "Invalid omics type errors" = invalid_omics_errors
+))
+cat("\n")
 
 
 print_results_summary <- function(results, label = "") {
@@ -215,8 +239,8 @@ restrict_to_complete_subjects <- function(pheno_df) {
 cat("OutcomeWAS Comprehensive Test Suite\n")
 cat("===================================\n\n")
 
-pheno_raw <- readRDS("PracticeData/pheno_example.rds")
-omics_raw <- readRDS("PracticeData/synth_small_betas.rds")
+pheno_raw <- readRDS("outcomewas/Examples/ExampleData/pheno_example.rds")
+omics_raw <- readRDS("outcomewas/Examples/ExampleData/dnam_mvalues.rds")
 
 if (any(sapply(pheno_raw, function(x) inherits(x, "haven_labelled")))) {
   for (col in names(pheno_raw)) {
@@ -233,21 +257,28 @@ if (any(sapply(pheno_raw, function(x) inherits(x, "haven_labelled")))) {
 }
 
 pheno_raw$SUBJECT_ID <- as.character(pheno_raw$SUBJECT_ID)
-pheno_raw$FU <- factor(as.integer(pheno_raw$FU))
-pheno_raw$FEMALE <- factor(as.integer(pheno_raw$FEMALE))
-pheno_raw$TREATMENT_GROUP <- factor(1 - pheno_raw$CONTROL_STATUS)
-pheno_raw$CONTROL_STATUS <- NULL
+pheno_raw$FU <- factor(as.integer(as.character(pheno_raw$FU)))
+pheno_raw$FEMALE <- factor(as.integer(as.character(pheno_raw$FEMALE)))
+pheno_raw$TREATMENT_GROUP <- factor(as.integer(as.character(pheno_raw$TREATMENT_GROUP)))
+if ("CONTROL_STATUS" %in% names(pheno_raw)) {
+  pheno_raw$CONTROL_STATUS <- NULL
+}
+pheno_raw[intersect(c("OUTCOME", "OUTCOME_TIME", "OUTCOME_STATUS"), names(pheno_raw))] <- NULL
 
 required_base_cols <- c("SAMPLE_ID", "FU", "SUBJECT_ID", "FEMALE", "TREATMENT_GROUP",
                         "agebl", "agevis", "ethnic", "race3", "mbmi")
 pheno <- pheno_raw[complete.cases(pheno_raw[, required_base_cols]), ]
 pheno <- pheno[!duplicated(paste(pheno$SUBJECT_ID, pheno$FU)), ]
 
-analyte_names <- rownames(omics_raw)
-sample_names <- colnames(omics_raw)
-omics_full <- as.data.frame(omics_raw)
-colnames(omics_full) <- sample_names
-omics_full <- cbind(ANALYTE_NAME = analyte_names, omics_full, stringsAsFactors = FALSE)
+omics_full <- as.data.frame(omics_raw, check.names = FALSE)
+if (!"ANALYTE_NAME" %in% names(omics_full)) {
+  omics_full <- cbind(
+    ANALYTE_NAME = rownames(omics_full),
+    omics_full,
+    stringsAsFactors = FALSE
+  )
+}
+sample_names <- setdiff(colnames(omics_full), "ANALYTE_NAME")
 
 shared_samples <- intersect(pheno$SAMPLE_ID, sample_names)
 pheno <- pheno[pheno$SAMPLE_ID %in% shared_samples, ]
@@ -259,8 +290,8 @@ pheno_multi_fu <- pheno
 
 omics_full <- omics_full[, c("ANALYTE_NAME", shared_samples), drop = FALSE]
 
-full_probes <- readRDS("Data/FAST_epicv1_epicv2_probe_list.rds")
-filtered_probes <- readRDS("Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
+full_probes <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_probe_list.rds")
+filtered_probes <- readRDS("outcomewas/Data/FAST_epicv1_epicv2_sugden_TruD_probe_list.rds")
 
 filtered_available <- omics_full[omics_full$ANALYTE_NAME %in% filtered_probes, ]
 full_only_available <- omics_full[omics_full$ANALYTE_NAME %in% full_probes &
@@ -605,6 +636,7 @@ test6_pass <- test6_top_pass && test6_change_struct_pass && test6_level_struct_p
 cat("\n")
 cat("FINAL SUMMARY\n")
 cat("=============\n")
+cat("Omics type validation:                      ", if (omics_type_validation_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 1 (Single-FU continuous + non-DNAm): ", if (test1_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 2 (Single-FU TTE + non-DNAm):        ", if (test2_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 3 (Multi-FU continuous + non-DNAm):  ", if (test3_pass) "PASS" else "FAIL", "\n", sep = "")
@@ -612,7 +644,8 @@ cat("Test 4 (Multi-FU TTE + non-DNAm):         ", if (test4_pass) "PASS" else "F
 cat("Test 5 (Multi-FU continuous + DNAm):      ", if (test5_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 6 (Multi-FU TTE + DNAm):             ", if (test6_pass) "PASS" else "FAIL", "\n", sep = "")
 
-all_tests_pass <- all(test1_pass, test2_pass, test3_pass, test4_pass, test5_pass, test6_pass)
+all_tests_pass <- all(omics_type_validation_pass, test1_pass, test2_pass,
+                      test3_pass, test4_pass, test5_pass, test6_pass)
 cat("\nOverall: ", if (all_tests_pass) "ALL TESTS PASSED" else "SOME TESTS FAILED", "\n", sep = "")
 
 if (!all_tests_pass) {

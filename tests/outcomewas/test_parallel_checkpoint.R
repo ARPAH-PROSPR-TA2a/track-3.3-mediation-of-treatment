@@ -1,4 +1,4 @@
-source("main.R")
+source(file.path("outcomewas", "main.R"))
 
 
 run_checks <- function(checks) {
@@ -149,8 +149,8 @@ attach_subject_level_outcome <- function(pheno_df, subject_outcomes, type = c("c
 cat("OutcomeWAS Parallelization and Checkpointing Test Suite\n")
 cat("=======================================================\n\n")
 
-pheno_raw <- readRDS("PracticeData/pheno_example.rds")
-omics_raw <- readRDS("PracticeData/synth_small_betas.rds")
+pheno_raw <- readRDS("outcomewas/Examples/ExampleData/pheno_example.rds")
+omics_raw <- readRDS("outcomewas/Examples/ExampleData/proteomics_log2.rds")
 
 if (any(sapply(pheno_raw, function(x) inherits(x, "haven_labelled")))) {
   for (col in names(pheno_raw)) {
@@ -167,10 +167,13 @@ if (any(sapply(pheno_raw, function(x) inherits(x, "haven_labelled")))) {
 }
 
 pheno_raw$SUBJECT_ID <- as.character(pheno_raw$SUBJECT_ID)
-pheno_raw$FU <- factor(as.integer(pheno_raw$FU))
-pheno_raw$FEMALE <- factor(as.integer(pheno_raw$FEMALE))
-pheno_raw$TREATMENT_GROUP <- factor(1 - pheno_raw$CONTROL_STATUS)
-pheno_raw$CONTROL_STATUS <- NULL
+pheno_raw$FU <- factor(as.integer(as.character(pheno_raw$FU)))
+pheno_raw$FEMALE <- factor(as.integer(as.character(pheno_raw$FEMALE)))
+pheno_raw$TREATMENT_GROUP <- factor(as.integer(as.character(pheno_raw$TREATMENT_GROUP)))
+if ("CONTROL_STATUS" %in% names(pheno_raw)) {
+  pheno_raw$CONTROL_STATUS <- NULL
+}
+pheno_raw[intersect(c("OUTCOME", "OUTCOME_TIME", "OUTCOME_STATUS"), names(pheno_raw))] <- NULL
 
 required_base_cols <- c(
   "SAMPLE_ID", "FU", "SUBJECT_ID", "FEMALE", "TREATMENT_GROUP",
@@ -179,11 +182,15 @@ required_base_cols <- c(
 pheno <- pheno_raw[complete.cases(pheno_raw[, required_base_cols]), ]
 pheno <- pheno[!duplicated(paste(pheno$SUBJECT_ID, pheno$FU)), ]
 
-analyte_names <- rownames(omics_raw)
-sample_names <- colnames(omics_raw)
-omics_full <- as.data.frame(omics_raw)
-colnames(omics_full) <- sample_names
-omics_full <- cbind(ANALYTE_NAME = analyte_names, omics_full, stringsAsFactors = FALSE)
+omics_full <- as.data.frame(omics_raw, check.names = FALSE)
+if (!"ANALYTE_NAME" %in% names(omics_full)) {
+  omics_full <- cbind(
+    ANALYTE_NAME = rownames(omics_full),
+    omics_full,
+    stringsAsFactors = FALSE
+  )
+}
+sample_names <- setdiff(colnames(omics_full), "ANALYTE_NAME")
 
 shared_samples <- intersect(pheno$SAMPLE_ID, sample_names)
 pheno <- pheno[pheno$SAMPLE_ID %in% shared_samples, ]
@@ -195,7 +202,7 @@ omics_small <- omics_full[omics_complete_idx, , drop = FALSE]
 omics_small <- omics_small[seq_len(min(30L, nrow(omics_small))), , drop = FALSE]
 
 if (nrow(omics_small) < 30L) {
-  stop("Need at least 30 complete analytes in PracticeData for test_parallel_checkpoint.R")
+  stop("Need at least 30 complete analytes in the tracked example data.")
 }
 
 pheno_single_fu <- pheno[pheno$FU %in% c(0, 1), ]
@@ -585,4 +592,5 @@ if (all_pass) {
   cat("ALL TESTS PASSED\n")
 } else {
   cat("SOME TESTS FAILED\n")
+  stop("One or more OutcomeWAS parallel/checkpoint tests failed.")
 }
