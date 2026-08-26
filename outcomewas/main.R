@@ -1,6 +1,6 @@
-source(file.path("outcomewas", "R", "validation_helpers.R"))
-source(file.path("outcomewas", "R", "reporting_helpers.R"))
-source(file.path("outcomewas", "R", "analysis_helpers.R"))
+source(file.path("R", "validation_helpers.R"))
+source(file.path("R", "reporting_helpers.R"))
+source(file.path("R", "analysis_helpers.R"))
 
 FAST_outcome_WAS <- function(pheno,
                              omics,

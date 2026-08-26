@@ -8,16 +8,16 @@ library(tidyr)
 # -----------------------------
 # Explicit paths and parameters
 # -----------------------------
-omics_raw_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_cleaned_log2_soma_matrix.csv")
-pheno_raw_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_clinical_w_omics_crosswalks.csv")
-genetic_pcs_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_GeneticPCs_20200727.xlsx")
-outcome_path <- path.expand("~/CALERIE/Proteomics/3.3/data/MetS_CALERIE_24mo_Outcome.csv")
+omics_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_cleaned_log2_soma_matrix.csv")
+pheno_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_clinical_w_omics_crosswalks.csv")
+genetic_pcs_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_GeneticPCs_20200727.xlsx")
+outcome_path <- path.expand("~/FAST/Data/CALERIE/Raw/MetS_CALERIE_24mo_Outcome.csv")
 
-pipeline_repo <- path.expand("~/CALERIE/repos/3.3/track-3.3-mediation-of-treatment")
-out_dir <- path.expand("~/CALERIE/Proteomics/3.3/MetS_24mo")
+pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
+out_dir <- path.expand("~/FAST/Outputs/3.3")
 
 omics_type <- "Proteomics"
-n_cores <- 30
+n_cores <- 1
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 log_file <- file.path(out_dir, "run.log")
@@ -126,7 +126,7 @@ stopifnot(identical(colnames(omics)[-1], pheno$SAMPLE_ID))
 # -----------------------------
 # Load pipeline functions
 # -----------------------------
-source(file.path(pipeline_repo, "main.R"), chdir = TRUE)
+source(file.path(pipeline_repo, "outcomewas/main.R"), chdir = TRUE)
 
 stopifnot(
   exists("FAST_outcome_WAS"),
