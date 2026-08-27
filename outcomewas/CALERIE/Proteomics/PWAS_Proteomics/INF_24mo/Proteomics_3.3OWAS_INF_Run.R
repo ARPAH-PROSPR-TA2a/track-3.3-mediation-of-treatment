@@ -8,13 +8,13 @@ library(tidyr)
 # -----------------------------
 # Explicit paths and parameters
 # -----------------------------
-omics_raw_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_cleaned_log2_soma_matrix.csv")
-pheno_raw_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_clinical_w_omics_crosswalks.csv")
-genetic_pcs_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_GeneticPCs_20200727.xlsx")
-outcome_path <- path.expand("~/CALERIE/Proteomics/3.3/data/INF_CALERIE_24mo_Outcome.csv")
+omics_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_cleaned_log2_soma_matrix.csv")
+pheno_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_clinical_w_omics_crosswalks.csv")
+genetic_pcs_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_GeneticPCs_20200727.xlsx")
+outcome_path <- path.expand("~/FAST/Data/CALERIE/Raw/INF_CALERIE_24mo_Outcome.csv")
 
-pipeline_repo <- path.expand("~/CALERIE/repos/3.3/track-3.3-mediation-of-treatment")
-out_dir <- path.expand("~/CALERIE/Proteomics/3.3/OutcomeWAS/INF_24mo")
+pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
+out_dir <- path.expand("~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF")
 
 omics_type <- "Proteomics"
 n_cores <- 3
@@ -128,10 +128,8 @@ stopifnot(identical(colnames(omics)[-1], pheno$SAMPLE_ID))
 # -----------------------------
 # Load pipeline functions
 # -----------------------------
-setwd(pipeline_repo)
-source(
-  file.path("outcomewas", "main.R")
-)
+
+source(file.path(pipeline_repo, "outcomewas/main.R"), chdir = TRUE)
 
 stopifnot(
   exists("FAST_outcome_WAS"),
@@ -153,12 +151,12 @@ results <- FAST_outcome_WAS(
   omics_type = omics_type,
   additional_covariates = covariates,
   n_cores = n_cores,
-  checkpoint_dir = file.path(out_dir, "checkpoints")
+  checkpoint_dir = file.path(out_dir, "Proteomics_3.3OWAS_INF_checkpoints")
 )
 
 saveRDS(
   results,
-  file = file.path(out_dir, "results.rds")
+  file = file.path(out_dir, "Proteomics_3.3OWAS_INF_results.rds")
 )
 
 cat("DONE analysis: ", as.character(Sys.time()), "\n",
@@ -179,7 +177,7 @@ reports <- FAST_outcome_WAS_reports(
 
 saveRDS(
   reports,
-  file = file.path(out_dir, "reports.rds")
+  file = file.path(out_dir, "Proteomics_3.3OWAS_INF_reports.rds")
 )
 
 cat("DONE reports: ", as.character(Sys.time()), "\n",
