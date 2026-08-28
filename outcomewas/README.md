@@ -11,8 +11,10 @@ Metabolomics, and DNA Methylation inputs. It fits separate baseline-adjusted
 models for each nonzero follow-up level and automatically stratifies results by
 sex when data permits.
 
-The pipeline exposes two functions: `FAST_outcome_WAS()` for the statistical
-analysis and `FAST_outcome_WAS_reports()` for QC and data summary reports.
+The pipeline exposes `FAST_outcome_WAS()` for the statistical analysis and
+`FAST_outcome_WAS_reports()` for QC and data summary reports. Optional
+proteomics post-processing functions add protein names to compact
+`outcome_effects` tables without changing either core result object.
 
 ## Installation
 
@@ -27,7 +29,7 @@ source the main module:
 
 ```r
 setwd("path/to/Track3.3")
-source(file.path("outcomewas", "main.R"))
+source(file.path("outcomewas", "main.R"), chdir = TRUE)
 ```
 
 Run OutcomeWAS from the repository root. The pipeline automatically sources
@@ -78,7 +80,8 @@ head(results$analysis_level$all$outcome_effects)
   to include as additional model covariates. These columns must be numeric,
   factor, or logical.
 - **`n_cores`** (`integer`, optional): Number of workers used for analyte-level
-  parallel model fitting. Defaults to `max(1, parallel::detectCores() - 1)`.
+  parallel model fitting. Defaults to `max(1, parallel::detectCores() - 1)`,
+  with `future::availableCores()` as the fallback when detection is unavailable.
   Set to `1` to run serially.
 - **`checkpoint_dir`** (`character`, optional): Directory for per-batch
   checkpoints. If `NULL`, checkpointing is disabled. If provided, completed
@@ -114,6 +117,60 @@ time-to-event outcomes, `EFFECT_SIZE` is the log hazard ratio and
 
 **DNAm only**: `BH_P_VALUE_FILTERED` is added to `coefficients` and
 `outcome_effects` for the pre-specified filtered probe set.
+
+## Optional Proteomics Annotation
+
+`get_annotated_outcome_effects()` traverses every available analysis, stratum,
+and follow-up in an OutcomeWAS result object and returns a named list of
+annotated `outcome_effects` tables. Saving that list is an explicit caller
+decision.
+
+```r
+protein_annotation <- read.csv(
+  "CALERIE_cleaned_protein_translation_table.csv",
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+fu_labels <- c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
+
+annotated_tables <- get_annotated_outcome_effects(
+  results = results,
+  protein_annotation = protein_annotation,
+  fu_labels = fu_labels
+)
+
+saveRDS(annotated_tables, "annotated_outcome_effect_tables.rds")
+```
+
+The translation table is joined from `outcome_effects$ANALYTE_NAME` to its
+unique, non-missing `AptName` column. It must contain the annotation fields used
+by Track 1.1.1: `AptName`, `SomaId`, `TargetFullName`, `Target`, `UniProt`,
+`EntrezGeneID`, `EntrezGeneSymbol`, `Uniprot_Unique`, and `Symbol_Unique`.
+Missing required columns or duplicate, missing, or empty `AptName` values are
+errors. Source column names must be unique and cannot reuse an output annotation
+field or `FU_LABEL`. Partial coverage retains unmatched result analytes with
+`NA` annotations and produces a warning; zero coverage is an error. Extra
+translation rows are allowed. Annotation preserves the original result row
+count and order.
+
+For a continuous outcome with `fu_labels` supplied, each annotated table has the
+same 15-column contract as the Track 1.1.1 annotated treatment-effect tables:
+
+```text
+ANALYTE_NAME, SomaId, TargetFullName, Target, UniProt, EntrezGeneID,
+EntrezGeneSymbol, Uniprot_Unique, Symbol_Unique, FU, FU_LABEL,
+EFFECT_SIZE, SE, P_VALUE, BH_P_VALUE
+```
+
+Time-to-event tables additionally contain `HAZARD_RATIO` immediately after
+`EFFECT_SIZE`. Follow-up values are not restricted to the CALERIE `1:4`
+convention; `fu_labels` is an explicit named character vector used to populate
+`FU_LABEL` and output table names. With `fu_labels = NULL`, `FU_LABEL` is omitted
+and list names use suffixes such as `FU1`.
+
+This function annotates only compact `outcome_effects`. It does not modify the
+input `results` object, its `coefficients` tables, or any object returned by
+`FAST_outcome_WAS_reports()`.
 
 ## FAST_outcome_WAS_reports()
 

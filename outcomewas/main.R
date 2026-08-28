@@ -1,6 +1,16 @@
-source(file.path("R", "validation_helpers.R"))
-source(file.path("R", "reporting_helpers.R"))
-source(file.path("R", "analysis_helpers.R"))
+.outcomewas_source_file <- sys.frame(1L)$ofile
+if (!file.exists(.outcomewas_source_file) &&
+    file.exists(basename(.outcomewas_source_file))) {
+  .outcomewas_source_file <- basename(.outcomewas_source_file)
+}
+.outcomewas_dir <- dirname(normalizePath(.outcomewas_source_file, mustWork = TRUE))
+
+source(file.path(.outcomewas_dir, "R", "validation_helpers.R"))
+source(file.path(.outcomewas_dir, "R", "reporting_helpers.R"))
+source(file.path(.outcomewas_dir, "R", "analysis_helpers.R"))
+source(file.path(.outcomewas_dir, "R", "proteomics_translation_helpers.R"))
+
+rm(.outcomewas_dir, .outcomewas_source_file)
 
 FAST_outcome_WAS <- function(pheno,
                              omics,
@@ -11,7 +21,11 @@ FAST_outcome_WAS <- function(pheno,
                              checkpoint_batch_size = 2000L) {
 
   if (is.null(n_cores)) {
-    n_cores <- max(1L, parallel::detectCores() - 1L)
+    detected_cores <- parallel::detectCores()
+    if (length(detected_cores) != 1L || is.na(detected_cores) || detected_cores < 1L) {
+      detected_cores <- future::availableCores()
+    }
+    n_cores <- max(1L, as.integer(detected_cores) - 1L)
   }
 
   # See TreatmentWAS note in the original scaffold. future snapshots the

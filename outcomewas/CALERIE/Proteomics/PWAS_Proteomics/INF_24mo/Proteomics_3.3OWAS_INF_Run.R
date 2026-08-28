@@ -12,12 +12,15 @@ omics_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_cleane
 pheno_raw_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_clinical_w_omics_crosswalks.csv")
 genetic_pcs_path <- path.expand("~/FAST/Data/CALERIE/Raw/CALERIE_GeneticPCs_20200727.xlsx")
 outcome_path <- path.expand("~/FAST/Data/CALERIE/Raw/INF_CALERIE_24mo_Outcome.csv")
+translation_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_cleaned_protein_translation_table.csv")
 
 pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
 out_dir <- path.expand("~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF")
+annotated_tables_path <- file.path(out_dir, "annotated_outcome_effect_tables.rds")
 
 omics_type <- "Proteomics"
 n_cores <- 3
+fu_labels <- c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 log_file <- file.path(out_dir, "run.log")
@@ -134,6 +137,7 @@ source(file.path(pipeline_repo, "outcomewas/main.R"), chdir = TRUE)
 stopifnot(
   exists("FAST_outcome_WAS"),
   exists("FAST_outcome_WAS_reports"),
+  exists("get_annotated_outcome_effects"),
   exists("pheno"),
   exists("omics"),
   exists("covariates")
@@ -158,6 +162,26 @@ saveRDS(
   results,
   file = file.path(out_dir, "Proteomics_3.3OWAS_INF_results.rds")
 )
+
+cat("START protein annotation: ", as.character(Sys.time()), "\n",
+    file = log_file, append = TRUE, sep = "")
+
+protein_annotation <- read.csv(
+  translation_path,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+annotated_tables <- get_annotated_outcome_effects(
+  results = results,
+  protein_annotation = protein_annotation,
+  fu_labels = fu_labels
+)
+saveRDS(annotated_tables, annotated_tables_path)
+
+cat("DONE protein annotation: ", as.character(Sys.time()), "\n",
+    "Annotated tables: ", annotated_tables_path, "\n",
+    file = log_file, append = TRUE, sep = "")
 
 cat("DONE analysis: ", as.character(Sys.time()), "\n",
     file = log_file, append = TRUE, sep = "")
