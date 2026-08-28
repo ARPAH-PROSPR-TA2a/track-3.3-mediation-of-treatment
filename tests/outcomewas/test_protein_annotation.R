@@ -119,7 +119,11 @@ cat("OutcomeWAS protein annotation tests\n\n")
 expect_rscript_success(
   c(
     'source(file.path("outcomewas", "main.R"), chdir = TRUE)',
-    'stopifnot(exists("FAST_outcome_WAS"), exists("get_annotated_outcome_effects"))'
+    paste0(
+      'stopifnot(exists("FAST_outcome_WAS"), ',
+      'exists("get_annotated_outcome_effects"), ',
+      '!exists("write_annotated_outcome_effect_tables"))'
+    )
   ),
   "main.R sources from a relative path with chdir = TRUE"
 )
@@ -130,7 +134,11 @@ main_path_literal <- paste(
 expect_rscript_success(
   c(
     paste0("source(", main_path_literal, ", chdir = TRUE)"),
-    'stopifnot(exists("FAST_outcome_WAS"), exists("get_annotated_outcome_effects"))'
+    paste0(
+      'stopifnot(exists("FAST_outcome_WAS"), ',
+      'exists("get_annotated_outcome_effects"), ',
+      '!exists("write_annotated_outcome_effect_tables"))'
+    )
   ),
   "main.R sources from an absolute path with chdir = TRUE"
 )
@@ -144,8 +152,6 @@ fu_labels <- c("1" = "3mo", "5" = "24mo")
 annotated <- get_annotated_outcome_effects(
   results = results,
   protein_annotation = annotation,
-  analysis_type = "change",
-  group = "all",
   fu_labels = fu_labels
 )
 
@@ -167,22 +173,55 @@ track111_columns <- c(
   "BH_P_VALUE"
 )
 
+expected_table_names <- c(
+  "change_all_3mo", "change_all_24mo",
+  "change_male_3mo", "change_male_24mo",
+  "level_all_3mo", "level_all_24mo",
+  "level_male_3mo", "level_male_24mo"
+)
+
+expect_true(is.list(annotated), "Annotation returns a list of tables")
 expect_true(
-  identical(names(annotated), track111_columns),
-  "Continuous annotated columns exactly match Track 1.1.1"
+  identical(names(annotated), expected_table_names),
+  "Annotation traverses analyses, non-NULL strata, and observed FU values"
 )
 expect_true(
-  identical(annotated$ANALYTE_NAME, results$analysis_change$all$outcome_effects$ANALYTE_NAME),
-  "Annotation preserves result row order"
+  all(vapply(
+    annotated,
+    function(table) identical(names(table), track111_columns),
+    logical(1)
+  )),
+  "Every continuous table exactly matches the Track 1.1.1 schema"
 )
-expect_true(nrow(annotated) == 4L, "Annotation preserves result row count")
-expect_equal(annotated$Target, c("Target_B", "Target_A", "Target_B", "Target_A"),
-             "Annotation values follow exact AptName matches")
-expect_equal(annotated$FU_LABEL, c("3mo", "3mo", "24mo", "24mo"),
-             "Custom FU labels map by FU")
+expect_true(
+  !any(grepl("female", names(annotated))),
+  "Annotation skips NULL strata"
+)
+
+change_all_3mo <- annotated$change_all_3mo
+source_3mo <- results$analysis_change$all$outcome_effects
+source_3mo <- source_3mo[source_3mo$FU == 1L, , drop = FALSE]
+expect_true(
+  identical(change_all_3mo$ANALYTE_NAME, source_3mo$ANALYTE_NAME),
+  "Each FU table preserves source row order"
+)
+expect_true(
+  nrow(change_all_3mo) == nrow(source_3mo),
+  "Each FU table preserves source row count"
+)
+expect_equal(
+  change_all_3mo$Target,
+  c("Target_B", "Target_A"),
+  "Annotation values follow exact AptName matches"
+)
+expect_equal(
+  change_all_3mo$FU_LABEL,
+  c("3mo", "3mo"),
+  "Custom FU labels map by FU"
+)
 for (column in c("FU", "EFFECT_SIZE", "SE", "P_VALUE", "BH_P_VALUE")) {
   expect_true(
-    identical(annotated[[column]], results$analysis_change$all$outcome_effects[[column]]),
+    identical(change_all_3mo[[column]], source_3mo[[column]]),
     paste("Source column is unchanged:", column)
   )
 }
@@ -190,13 +229,17 @@ expect_true(identical(results, results_before), "Input result object is not muta
 expect_true(identical(annotation, annotation_before), "Annotation input is not mutated")
 
 without_labels <- get_annotated_outcome_effects(results, annotation)
-expect_true(!"FU_LABEL" %in% names(without_labels), "FU_LABEL is omitted by default")
-
-fu5 <- get_annotated_outcome_effects(results, annotation, fu = 5L, fu_labels = fu_labels)
-expect_true(nrow(fu5) == 2L && all(fu5$FU == 5L), "FU filtering accepts values beyond four")
 expect_true(
-  identical(fu5$ANALYTE_NAME, c("B", "A")),
-  "FU filtering preserves relative row order"
+  all(grepl("_(FU1|FU5)$", names(without_labels))),
+  "Default table names support arbitrary observed FU values"
+)
+expect_true(
+  all(vapply(
+    without_labels,
+    function(table) !"FU_LABEL" %in% names(table),
+    logical(1)
+  )),
+  "FU_LABEL is omitted from every table by default"
 )
 
 tte_results <- make_results(make_effects(tte = TRUE, extra = TRUE))
@@ -204,11 +247,18 @@ tte <- get_annotated_outcome_effects(tte_results, annotation, fu_labels = fu_lab
 expected_tte_columns <- append(track111_columns, "HAZARD_RATIO", after = 12L)
 expected_tte_columns <- c(expected_tte_columns, "FUTURE_FIELD")
 expect_true(
-  identical(names(tte), expected_tte_columns),
-  "TTE and future columns are preserved dynamically"
+  all(vapply(
+    tte,
+    function(table) identical(names(table), expected_tte_columns),
+    logical(1)
+  )),
+  "Every TTE table preserves hazard ratios and future columns dynamically"
 )
 expect_true(
-  identical(tte$HAZARD_RATIO, tte_results$analysis_change$all$outcome_effects$HAZARD_RATIO),
+  identical(
+    tte$change_all_3mo$HAZARD_RATIO,
+    tte_results$analysis_change$all$outcome_effects$HAZARD_RATIO[1:2]
+  ),
   "Hazard ratios are unchanged"
 )
 
@@ -219,7 +269,11 @@ partial <- expect_warning(
   "Partial annotation coverage warns"
 )
 expect_true(
-  all(is.na(partial$SomaId[partial$ANALYTE_NAME == "B"])),
+  all(vapply(
+    partial,
+    function(table) all(is.na(table$SomaId[table$ANALYTE_NAME == "B"])),
+    logical(1)
+  )),
   "Unmatched result rows are retained with NA annotation"
 )
 
@@ -252,6 +306,30 @@ expect_error(
   "Missing annotation columns error"
 )
 
+duplicate_annotation_columns <- annotation
+names(duplicate_annotation_columns)[2L] <- "AptName"
+expect_error(
+  get_annotated_outcome_effects(results, duplicate_annotation_columns),
+  "column names must be unique",
+  "Duplicate annotation column names error"
+)
+
+reserved_column_results <- results
+reserved_column_results$analysis_change$all$outcome_effects$UniProt <- "collision"
+expect_error(
+  get_annotated_outcome_effects(reserved_column_results, annotation),
+  "reserved annotation columns: UniProt",
+  "Reserved annotation columns in outcome effects error"
+)
+
+duplicate_result_columns <- results
+names(duplicate_result_columns$analysis_change$all$outcome_effects)[3L] <- "FU"
+expect_error(
+  get_annotated_outcome_effects(duplicate_result_columns, annotation),
+  "column names must be unique",
+  "Duplicate outcome-effect column names error"
+)
+
 duplicate_results <- results
 duplicate_results$analysis_change$all$outcome_effects <- rbind(
   duplicate_results$analysis_change$all$outcome_effects,
@@ -276,63 +354,26 @@ expect_error(
   "missing the required list",
   "Malformed result structure errors"
 )
+
+invalid_fu_results <- results
+invalid_fu_results$analysis_change$all$outcome_effects$FU[1L] <- 1.5
 expect_error(
-  get_annotated_outcome_effects(results, annotation, fu = 2L),
-  "Requested fu values are not present",
-  "Absent requested FU errors"
-)
-expect_error(
-  get_annotated_outcome_effects(results, annotation, fu = 1.5),
+  get_annotated_outcome_effects(invalid_fu_results, annotation),
   "positive integer",
-  "Noninteger requested FU errors"
+  "Noninteger observed FU errors"
 )
+
 expect_error(
   get_annotated_outcome_effects(results, annotation, fu_labels = c("1" = "3mo")),
   "missing labels for FU: 5",
   "Incomplete FU labels error"
 )
-expect_true(
-  is.null(get_annotated_outcome_effects(results, annotation, group = "female")),
-  "Unavailable strata return NULL"
-)
 
 output_rds <- tempfile("annotated-outcome-effects-", fileext = ".rds")
-tables <- write_annotated_outcome_effect_tables(
-  results,
-  annotation,
-  output_rds,
-  fu_labels = fu_labels
-)
-expected_table_names <- c(
-  "change_all_3mo", "change_all_24mo",
-  "change_male_3mo", "change_male_24mo",
-  "level_all_3mo", "level_all_24mo",
-  "level_male_3mo", "level_male_24mo"
-)
-expect_true(identical(names(tables), expected_table_names), "Writer uses labeled table names")
-expect_true(identical(readRDS(output_rds), tables), "Writer saves the returned table list")
+saveRDS(annotated, output_rds)
 expect_true(
-  all(vapply(tables, function(table) identical(names(table), track111_columns), logical(1))),
-  "Every continuous exported table uses the Track 1.1.1 schema"
-)
-expect_true(
-  !any(grepl("female", names(tables))),
-  "Writer skips NULL strata"
-)
-
-default_output_rds <- tempfile("annotated-outcome-effects-default-", fileext = ".rds")
-default_tables <- write_annotated_outcome_effect_tables(
-  results,
-  annotation,
-  default_output_rds
-)
-expect_true(
-  all(grepl("_(FU1|FU5)$", names(default_tables))),
-  "Writer uses FU<n> names when labels are absent"
-)
-expect_true(
-  all(vapply(default_tables, function(table) !"FU_LABEL" %in% names(table), logical(1))),
-  "Default exported tables omit FU_LABEL"
+  identical(readRDS(output_rds), annotated),
+  "Caller can save and reload the returned table list"
 )
 
 per_fu_results <- make_results(data.frame(
@@ -344,21 +385,15 @@ per_fu_results <- make_results(data.frame(
   BH_P_VALUE = c(0.1, 0.2),
   stringsAsFactors = FALSE
 ))
-per_fu_output_rds <- tempfile("annotated-outcome-effects-per-fu-", fileext = ".rds")
 expect_error(
-  write_annotated_outcome_effect_tables(
+  get_annotated_outcome_effects(
     per_fu_results,
     make_annotation("A"),
-    per_fu_output_rds,
     fu_labels = fu_labels
   ),
   "No unique outcome analytes matched",
-  "Writer rejects zero annotation coverage within an exported FU table"
-)
-expect_true(
-  !file.exists(per_fu_output_rds),
-  "Writer does not save a partial table list after per-FU coverage failure"
+  "Annotation rejects zero coverage within any FU table"
 )
 
-unlink(c(output_rds, default_output_rds, per_fu_output_rds))
+unlink(output_rds)
 cat("\nAll OutcomeWAS protein annotation tests passed.\n")

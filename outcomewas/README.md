@@ -120,10 +120,10 @@ time-to-event outcomes, `EFFECT_SIZE` is the log hazard ratio and
 
 ## Optional Proteomics Annotation
 
-`get_annotated_outcome_effects()` creates one annotated, optionally
-follow-up-filtered `outcome_effects` table. Its companion
-`write_annotated_outcome_effect_tables()` creates all available analysis,
-stratum, and follow-up tables and saves the named list as an RDS file.
+`get_annotated_outcome_effects()` traverses every available analysis, stratum,
+and follow-up in an OutcomeWAS result object and returns a named list of
+annotated `outcome_effects` tables. Saving that list is an explicit caller
+decision.
 
 ```r
 protein_annotation <- read.csv(
@@ -133,21 +133,13 @@ protein_annotation <- read.csv(
 )
 fu_labels <- c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 
-change_all_3mo <- get_annotated_outcome_effects(
+annotated_tables <- get_annotated_outcome_effects(
   results = results,
   protein_annotation = protein_annotation,
-  analysis_type = "change",
-  group = "all",
-  fu = 1,
   fu_labels = fu_labels
 )
 
-annotated_tables <- write_annotated_outcome_effect_tables(
-  results = results,
-  protein_annotation = protein_annotation,
-  output_rds = "annotated_outcome_effect_tables.rds",
-  fu_labels = fu_labels
-)
+saveRDS(annotated_tables, "annotated_outcome_effect_tables.rds")
 ```
 
 The translation table is joined from `outcome_effects$ANALYTE_NAME` to its
@@ -155,9 +147,11 @@ unique, non-missing `AptName` column. It must contain the annotation fields used
 by Track 1.1.1: `AptName`, `SomaId`, `TargetFullName`, `Target`, `UniProt`,
 `EntrezGeneID`, `EntrezGeneSymbol`, `Uniprot_Unique`, and `Symbol_Unique`.
 Missing required columns or duplicate, missing, or empty `AptName` values are
-errors. Partial coverage retains unmatched result analytes with `NA` annotations
-and produces a warning; zero coverage is an error. Extra translation rows are
-allowed. Annotation preserves the original result row count and order.
+errors. Source column names must be unique and cannot reuse an output annotation
+field or `FU_LABEL`. Partial coverage retains unmatched result analytes with
+`NA` annotations and produces a warning; zero coverage is an error. Extra
+translation rows are allowed. Annotation preserves the original result row
+count and order.
 
 For a continuous outcome with `fu_labels` supplied, each annotated table has the
 same 15-column contract as the Track 1.1.1 annotated treatment-effect tables:
@@ -172,9 +166,9 @@ Time-to-event tables additionally contain `HAZARD_RATIO` immediately after
 `EFFECT_SIZE`. Follow-up values are not restricted to the CALERIE `1:4`
 convention; `fu_labels` is an explicit named character vector used to populate
 `FU_LABEL` and output table names. With `fu_labels = NULL`, `FU_LABEL` is omitted
-and writer names use suffixes such as `FU1`.
+and list names use suffixes such as `FU1`.
 
-These functions annotate only compact `outcome_effects`. They do not modify the
+This function annotates only compact `outcome_effects`. It does not modify the
 input `results` object, its `coefficients` tables, or any object returned by
 `FAST_outcome_WAS_reports()`.
 

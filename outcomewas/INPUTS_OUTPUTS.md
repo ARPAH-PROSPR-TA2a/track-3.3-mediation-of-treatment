@@ -301,24 +301,14 @@ It does not change the object returned by `FAST_outcome_WAS()`, any
 get_annotated_outcome_effects(
   results,
   protein_annotation,
-  analysis_type = "change",
-  group = "all",
-  fu = NULL,
-  fu_labels = NULL
-)
-
-write_annotated_outcome_effect_tables(
-  results,
-  protein_annotation,
-  output_rds,
   fu_labels = NULL
 )
 ```
 
-`results` must be an OutcomeWAS result object. `analysis_type` is `"change"`
-or `"level"`; `group` is `"all"`, `"male"`, or `"female"`. `fu` may be one
-or more follow-up values or `NULL` for every available follow-up. Follow-ups are
-not restricted to `1:4`.
+`results` must be an OutcomeWAS result object. The function traverses `change`
+and `level`, every available `all`, `male`, and `female` stratum, and every
+observed follow-up. It returns one named table per analysis, stratum, and FU;
+`NULL` strata are skipped. Follow-ups are not restricted to `1:4`.
 
 `protein_annotation` is a data frame requiring these columns:
 
@@ -336,10 +326,12 @@ not restricted to `1:4`.
 
 Missing required columns are errors. `AptName` must be non-missing, non-empty,
 and unique; violations are errors because they would make the annotation join
-ambiguous. The join preserves the OutcomeWAS row order and row count. Analytes
-without an `AptName` match remain in the output with `NA` annotation fields and
-produce a warning. If no selected analyte matches, the function stops.
-Translation rows unused by the selected result table are allowed.
+ambiguous. Source column names must be unique and cannot reuse an output
+annotation field or `FU_LABEL`. The join preserves the OutcomeWAS row order and
+row count. Analytes without an `AptName` match remain in the output with `NA`
+annotation fields and produce a warning. If an output table has no matched
+analytes, the function stops. Translation rows unused by an output table are
+allowed.
 
 `fu_labels`, when supplied, is a named character vector whose names are the
 character representations of `FU`, for example:
@@ -349,10 +341,10 @@ c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 ```
 
 It must cover every FU returned by the call. It supplies the `FU_LABEL` field
-and the follow-up portion of names in the writer's returned list. This explicit
-mapping supports arbitrary follow-up values without imposing CALERIE's
-four-visit convention. When `fu_labels = NULL`, `FU_LABEL` is omitted and writer
-names use `FU` plus the integer value, such as `change_all_FU1`.
+and the follow-up portion of names in the returned list. This explicit mapping
+supports arbitrary follow-up values without imposing CALERIE's four-visit
+convention. When `fu_labels = NULL`, `FU_LABEL` is omitted and list names use
+`FU` plus the integer value, such as `change_all_FU1`.
 
 For continuous outcomes with `fu_labels` supplied, each annotated table has
 exactly these 15 columns, in the same order as Track 1.1.1 annotated
@@ -378,8 +370,17 @@ BH_P_VALUE
 
 Without `fu_labels`, the continuous table omits `FU_LABEL` and has 14 columns.
 For time-to-event outcomes, the same contract also contains `HAZARD_RATIO`
-immediately after `EFFECT_SIZE`. The writer returns the named list invisibly
-after saving it to `output_rds`; the output directory must already exist.
+immediately after `EFFECT_SIZE`. The function returns the named list without
+writing files; callers save it explicitly when needed:
+
+```r
+annotated_tables <- get_annotated_outcome_effects(
+  results,
+  protein_annotation,
+  fu_labels = fu_labels
+)
+saveRDS(annotated_tables, "annotated_outcome_effect_tables.rds")
+```
 
 ---
 

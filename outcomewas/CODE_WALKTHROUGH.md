@@ -44,8 +44,7 @@ OutcomeWAS exposes two core public functions:
   fitting models.
 
 For optional proteomics post-processing, the same entry point also exposes
-`get_annotated_outcome_effects()` and
-`write_annotated_outcome_effect_tables()`.
+`get_annotated_outcome_effects()`.
 
 <div class="note">
 Unlike TreatmentWAS, OutcomeWAS does not use mixed models. Multi-follow-up data
@@ -80,7 +79,7 @@ outcomewas/
     analysis_helpers.R       Model fitting, FU looping, BH correction, checkpointing
     reporting_helpers.R      QC summaries and outcome reports
     plotting_helpers.R       QQ and volcano plots from outcome_effects
-    proteomics_translation_helpers.R  Optional outcome-effect annotation/export
+    proteomics_translation_helpers.R  Optional outcome-effect annotation
   Data/                      OutcomeWAS DNAm probe lists
   Examples/                  Pipeline-specific example inputs, outputs, and scripts
 tests/outcomewas/
@@ -98,7 +97,7 @@ Function locations:
 | `outcomewas/R/analysis_helpers.R` | `.perform_continuous_analysis()`, `.perform_tte_analysis()`, `.perform_analysis()`, `.run_stratified_analysis()`, `.apply_multiple_testing_correction()`, `.add_filtered_bh_correction()` |
 | `outcomewas/R/reporting_helpers.R` | `.generate_reports()`, `.create_pheno_data_report()`, `.create_omics_data_report()`, `.create_addx_covariate_report()`, `.create_analysis_sample_summary()`, `.create_continuous_outcome_report()`, `.create_tte_outcome_report()` |
 | `outcomewas/R/plotting_helpers.R` | `plot_qq()`, `plot_volcano()`, `generate_all_plots()` |
-| `outcomewas/R/proteomics_translation_helpers.R` | `get_annotated_outcome_effects()`, `write_annotated_outcome_effect_tables()` |
+| `outcomewas/R/proteomics_translation_helpers.R` | `get_annotated_outcome_effects()`, internal `.annotate_outcome_effects_table()` |
 
 ---
 
@@ -745,39 +744,42 @@ accepts an existing OutcomeWAS result object and annotates only its compact
 `outcome_effects` tables. It never mutates the input result object, the broader
 `coefficients` tables, or an OutcomeWAS report object.
 
-### One selected table
+### Annotate the complete result object
 
 ```r
 get_annotated_outcome_effects(
   results,
   protein_annotation,
-  analysis_type = "change",
-  group = "all",
-  fu = NULL,
   fu_labels = NULL
 )
 ```
 
 The function:
 
-1. Selects `results$analysis_<type>$<group>$outcome_effects`.
-2. Validates the compact OutcomeWAS fields and unique `ANALYTE_NAME x FU` rows.
-3. Optionally filters to one or more requested positive-integer follow-ups.
+1. Traverses `change` and `level`, each available `all`, `male`, and `female`
+   stratum, and every observed follow-up; `NULL` strata are skipped.
+2. Uses the internal `.annotate_outcome_effects_table()` helper to validate and
+   annotate each compact `outcome_effects` table for one FU.
+3. Validates the compact OutcomeWAS fields and unique `ANALYTE_NAME x FU` rows.
 4. Requires `protein_annotation` to contain `AptName` plus `SomaId`,
    `TargetFullName`, `Target`, `UniProt`, `EntrezGeneID`, `EntrezGeneSymbol`,
    `Uniprot_Unique`, and `Symbol_Unique`.
 5. Requires `AptName` to be non-missing, nonblank, and unique.
-6. Matches `outcome_effects$ANALYTE_NAME` to `protein_annotation$AptName` with
+6. Rejects duplicate source column names and source columns that reuse an
+   output annotation field or `FU_LABEL`.
+7. Matches `outcome_effects$ANALYTE_NAME` to `protein_annotation$AptName` with
    `match()`, which preserves the result row order and cannot multiply rows.
+8. Returns the tables in a named list, using names such as
+   `change_all_3mo` or, without labels, `change_all_FU1`.
 
 Partial annotation coverage retains unmatched result rows with `NA` metadata
-and emits a warning. Zero matched analytes is an error. Translation-table rows
-not used by the selected result table are allowed.
+and emits a warning. Zero matched analytes in any output table is an error.
+Translation-table rows not used by an output table are allowed.
 
 When `fu_labels` is provided, it must be a named character vector with unique,
 nonblank positive-integer names and unique, nonblank labels. It must cover every
-FU returned by that call. The function then inserts `FU_LABEL` immediately after
-`FU`. With the CALERIE mapping `c("1" = "3mo", "2" = "6mo", "3" = "12mo",
+FU returned by the result object. The function then inserts `FU_LABEL`
+immediately after `FU`. With the CALERIE mapping `c("1" = "3mo", "2" = "6mo", "3" = "12mo",
 "4" = "24mo")`, a continuous table has the exact 15-column Track 1.1.1
 compatible order:
 
@@ -790,22 +792,17 @@ EFFECT_SIZE, SE, P_VALUE, BH_P_VALUE
 If `fu_labels = NULL`, `FU_LABEL` is omitted. Time-to-event output preserves
 `HAZARD_RATIO` immediately after `EFFECT_SIZE`.
 
-### Export every available table
+### Save the returned tables
 
 ```r
-write_annotated_outcome_effect_tables(
+annotated_tables <- get_annotated_outcome_effects(
   results,
   protein_annotation,
-  output_rds,
-  fu_labels = NULL
+  fu_labels = fu_labels
 )
+saveRDS(annotated_tables, "annotated_outcome_effect_tables.rds")
 ```
 
-The writer traverses `change` and `level`, each available `all`, `male`, and
-`female` stratum, and every observed FU. It calls
-`get_annotated_outcome_effects()` separately for each FU, saves the named list
-to `output_rds`, and returns the list invisibly. This ensures zero annotation
-coverage fails for the individual table that would otherwise be exported.
-With labels, names follow `change_all_3mo`; without labels, they follow
-`change_all_FU1`. A `NULL` stratum is skipped. The output directory must already
-exist.
+Annotation and file I/O are separate responsibilities.
+`get_annotated_outcome_effects()` returns the complete named list and never
+writes a file; the caller chooses whether and where to persist it.

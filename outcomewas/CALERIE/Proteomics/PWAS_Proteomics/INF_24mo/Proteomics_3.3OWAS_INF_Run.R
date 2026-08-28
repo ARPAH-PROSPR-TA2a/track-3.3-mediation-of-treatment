@@ -137,7 +137,7 @@ source(file.path(pipeline_repo, "outcomewas/main.R"), chdir = TRUE)
 stopifnot(
   exists("FAST_outcome_WAS"),
   exists("FAST_outcome_WAS_reports"),
-  exists("write_annotated_outcome_effect_tables"),
+  exists("get_annotated_outcome_effects"),
   exists("pheno"),
   exists("omics"),
   exists("covariates")
@@ -172,12 +172,12 @@ protein_annotation <- read.csv(
   check.names = FALSE
 )
 
-write_annotated_outcome_effect_tables(
+annotated_tables <- get_annotated_outcome_effects(
   results = results,
   protein_annotation = protein_annotation,
-  output_rds = annotated_tables_path,
   fu_labels = fu_labels
 )
+saveRDS(annotated_tables, annotated_tables_path)
 
 cat("DONE protein annotation: ", as.character(Sys.time()), "\n",
     "Annotated tables: ", annotated_tables_path, "\n",

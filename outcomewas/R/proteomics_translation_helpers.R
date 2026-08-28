@@ -67,6 +67,9 @@
   if (!is.data.frame(protein_annotation)) {
     stop("protein_annotation must be a data.frame.")
   }
+  if (anyDuplicated(names(protein_annotation))) {
+    stop("protein_annotation column names must be unique.")
+  }
 
   required_columns <- c("AptName", .protein_annotation_columns)
   missing_columns <- setdiff(required_columns, names(protein_annotation))
@@ -126,19 +129,23 @@
 }
 
 
-get_annotated_outcome_effects <- function(
-    results,
+.annotate_outcome_effects_table <- function(
+    outcome_effects,
     protein_annotation,
-    analysis_type = c("change", "level"),
-    group = c("all", "male", "female"),
-    fu = NULL,
-    fu_labels = NULL
+    annotation_keys,
+    fu_label = NULL
 ) {
-  analysis_type <- match.arg(analysis_type)
-  group <- match.arg(group)
-  outcome_effects <- .select_outcome_effects(results, analysis_type, group)
-  if (is.null(outcome_effects)) {
-    return(NULL)
+  if (anyDuplicated(names(outcome_effects))) {
+    stop("outcome_effects column names must be unique.")
+  }
+
+  reserved_columns <- c(.protein_annotation_columns, "FU_LABEL")
+  conflicting_columns <- intersect(names(outcome_effects), reserved_columns)
+  if (length(conflicting_columns) > 0L) {
+    stop(
+      "outcome_effects contains reserved annotation columns: ",
+      paste(conflicting_columns, collapse = ", ")
+    )
   }
 
   required_effect_columns <- c(
@@ -166,35 +173,19 @@ get_annotated_outcome_effects <- function(
   if (anyDuplicated(result_keys)) {
     stop("outcome_effects must have unique ANALYTE_NAME x FU rows.")
   }
-
-  if (!is.null(fu)) {
-    requested_fu <- unique(.as_positive_integer_fu(fu, "fu"))
-    absent_fu <- setdiff(requested_fu, unique(outcome_fu))
-    if (length(absent_fu) > 0L) {
-      stop(
-        "Requested fu values are not present in outcome_effects: ",
-        paste(absent_fu, collapse = ", ")
-      )
-    }
-
-    keep <- outcome_fu %in% requested_fu
-    outcome_effects <- outcome_effects[keep, , drop = FALSE]
-    analyte_names <- analyte_names[keep]
-    outcome_fu <- outcome_fu[keep]
+  if (length(unique(outcome_fu)) != 1L) {
+    stop("Internal error: one annotated outcome-effect table must contain exactly one FU.")
   }
 
-  validated_labels <- .validate_fu_labels(fu_labels)
-  if (!is.null(validated_labels)) {
-    missing_labels <- setdiff(unique(outcome_fu), as.integer(names(validated_labels)))
-    if (length(missing_labels) > 0L) {
-      stop(
-        "fu_labels is missing labels for FU: ",
-        paste(missing_labels, collapse = ", ")
-      )
+  if (!is.null(fu_label)) {
+    if (!is.character(fu_label) ||
+        length(fu_label) != 1L ||
+        is.na(fu_label) ||
+        trimws(fu_label) == "") {
+      stop("Internal error: fu_label must be one nonblank character value.")
     }
   }
 
-  annotation_keys <- .validate_protein_annotation(protein_annotation)
   matched_rows <- match(analyte_names, annotation_keys)
   unique_analytes <- unique(analyte_names)
   unique_matches <- match(unique_analytes, annotation_keys)
@@ -227,9 +218,9 @@ get_annotated_outcome_effects <- function(
     annotation,
     outcome_effects[, "FU", drop = FALSE]
   )
-  if (!is.null(validated_labels)) {
+  if (!is.null(fu_label)) {
     output_parts[[length(output_parts) + 1L]] <- data.frame(
-      FU_LABEL = unname(validated_labels[as.character(outcome_fu)]),
+      FU_LABEL = rep(unname(fu_label), nrow(outcome_effects)),
       stringsAsFactors = FALSE
     )
   }
@@ -249,26 +240,13 @@ get_annotated_outcome_effects <- function(
 }
 
 
-write_annotated_outcome_effect_tables <- function(
+get_annotated_outcome_effects <- function(
     results,
     protein_annotation,
-    output_rds,
     fu_labels = NULL
 ) {
-  if (!is.character(output_rds) ||
-      length(output_rds) != 1L ||
-      is.na(output_rds) ||
-      trimws(output_rds) == "") {
-    stop("output_rds must be one nonblank file path.")
-  }
-
-  output_rds <- path.expand(output_rds)
-  output_parent <- dirname(output_rds)
-  if (!dir.exists(output_parent)) {
-    stop("The output_rds parent directory does not exist: ", output_parent)
-  }
-
   validated_labels <- .validate_fu_labels(fu_labels)
+  annotation_keys <- .validate_protein_annotation(protein_annotation)
   tables <- list()
 
   for (analysis_type in c("change", "level")) {
@@ -281,17 +259,35 @@ write_annotated_outcome_effect_tables <- function(
         stop("outcome_effects is missing required columns: FU")
       }
 
-      available_fu <- sort(unique(
-        .as_positive_integer_fu(outcome_effects$FU, "outcome_effects$FU")
-      ))
+      outcome_fu <- .as_positive_integer_fu(
+        outcome_effects$FU,
+        "outcome_effects$FU"
+      )
+      available_fu <- sort(unique(outcome_fu))
+      if (!is.null(validated_labels)) {
+        missing_labels <- setdiff(
+          available_fu,
+          as.integer(names(validated_labels))
+        )
+        if (length(missing_labels) > 0L) {
+          stop(
+            "fu_labels is missing labels for FU: ",
+            paste(missing_labels, collapse = ", ")
+          )
+        }
+      }
+
       for (fu_value in available_fu) {
-        table <- get_annotated_outcome_effects(
-          results = results,
+        table_rows <- outcome_fu == fu_value
+        table <- .annotate_outcome_effects_table(
+          outcome_effects = outcome_effects[table_rows, , drop = FALSE],
           protein_annotation = protein_annotation,
-          analysis_type = analysis_type,
-          group = group,
-          fu = fu_value,
-          fu_labels = validated_labels
+          annotation_keys = annotation_keys,
+          fu_label = if (is.null(validated_labels)) {
+            NULL
+          } else {
+            validated_labels[[as.character(fu_value)]]
+          }
         )
 
         fu_suffix <- if (is.null(validated_labels)) {
@@ -305,6 +301,9 @@ write_annotated_outcome_effect_tables <- function(
     }
   }
 
-  saveRDS(tables, output_rds)
-  invisible(tables)
+  if (length(tables) == 0L) {
+    stop("results does not contain any available outcome_effects tables.")
+  }
+
+  tables
 }
