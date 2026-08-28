@@ -132,8 +132,9 @@ Sample matching:
   columns to include as model covariates. These covariates are taken from the
   follow-up row used for each analysis.
 - `n_cores`: `FAST_outcome_WAS()` only. Number of workers for parallel model
-  fitting. Defaults to `max(1, parallel::detectCores() - 1)`. Set to `1` for
-  serial runs.
+  fitting. Defaults to `max(1, parallel::detectCores() - 1)`, with
+  `future::availableCores()` as the fallback when detection is unavailable.
+  Set to `1` for serial runs.
 - `checkpoint_dir`: `FAST_outcome_WAS()` only. Optional directory for resumable
   batch checkpoints. If set, checkpoint files are written under:
 
@@ -287,6 +288,98 @@ Additional columns:
 |:---|:---|:---|
 | `HAZARD_RATIO` | Time-to-event outcome | `exp(EFFECT_SIZE)` |
 | `BH_P_VALUE_FILTERED` | DNAm | BH correction within the filtered probe set; `NA` for probes outside that set |
+
+---
+
+### Optional annotated proteomics tables
+
+Protein annotation is a separate post-processing step for `outcome_effects`.
+It does not change the object returned by `FAST_outcome_WAS()`, any
+`coefficients` table, or the object returned by `FAST_outcome_WAS_reports()`.
+
+```r
+get_annotated_outcome_effects(
+  results,
+  protein_annotation,
+  analysis_type = "change",
+  group = "all",
+  fu = NULL,
+  fu_labels = NULL
+)
+
+write_annotated_outcome_effect_tables(
+  results,
+  protein_annotation,
+  output_rds,
+  fu_labels = NULL
+)
+```
+
+`results` must be an OutcomeWAS result object. `analysis_type` is `"change"`
+or `"level"`; `group` is `"all"`, `"male"`, or `"female"`. `fu` may be one
+or more follow-up values or `NULL` for every available follow-up. Follow-ups are
+not restricted to `1:4`.
+
+`protein_annotation` is a data frame requiring these columns:
+
+| Column | Role |
+|:---|:---|
+| `AptName` | Unique translation key matched to `outcome_effects$ANALYTE_NAME` |
+| `SomaId` | SomaScan identifier |
+| `TargetFullName` | Full target name |
+| `Target` | Short target name |
+| `UniProt` | UniProt identifier supplied by the translation table |
+| `EntrezGeneID` | Entrez gene identifier |
+| `EntrezGeneSymbol` | Entrez gene symbol |
+| `Uniprot_Unique` | Uniqueness-qualified UniProt value |
+| `Symbol_Unique` | Uniqueness-qualified gene-symbol value |
+
+Missing required columns are errors. `AptName` must be non-missing, non-empty,
+and unique; violations are errors because they would make the annotation join
+ambiguous. The join preserves the OutcomeWAS row order and row count. Analytes
+without an `AptName` match remain in the output with `NA` annotation fields and
+produce a warning. If no selected analyte matches, the function stops.
+Translation rows unused by the selected result table are allowed.
+
+`fu_labels`, when supplied, is a named character vector whose names are the
+character representations of `FU`, for example:
+
+```r
+c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
+```
+
+It must cover every FU returned by the call. It supplies the `FU_LABEL` field
+and the follow-up portion of names in the writer's returned list. This explicit
+mapping supports arbitrary follow-up values without imposing CALERIE's
+four-visit convention. When `fu_labels = NULL`, `FU_LABEL` is omitted and writer
+names use `FU` plus the integer value, such as `change_all_FU1`.
+
+For continuous outcomes with `fu_labels` supplied, each annotated table has
+exactly these 15 columns, in the same order as Track 1.1.1 annotated
+treatment-effect tables:
+
+```text
+ANALYTE_NAME
+SomaId
+TargetFullName
+Target
+UniProt
+EntrezGeneID
+EntrezGeneSymbol
+Uniprot_Unique
+Symbol_Unique
+FU
+FU_LABEL
+EFFECT_SIZE
+SE
+P_VALUE
+BH_P_VALUE
+```
+
+Without `fu_labels`, the continuous table omits `FU_LABEL` and has 14 columns.
+For time-to-event outcomes, the same contract also contains `HAZARD_RATIO`
+immediately after `EFFECT_SIZE`. The writer returns the named list invisibly
+after saving it to `output_rds`; the output directory must already exist.
 
 ---
 
