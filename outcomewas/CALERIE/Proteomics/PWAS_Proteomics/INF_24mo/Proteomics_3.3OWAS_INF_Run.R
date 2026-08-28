@@ -16,7 +16,7 @@ translation_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_clea
 
 pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
 out_dir <- path.expand("~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF")
-annotated_tables_path <- file.path(out_dir, "Proteomics_3.3OWAS_INF_results_annotated.rds")
+annotated_results_path <- file.path(out_dir, "Proteomics_3.3OWAS_INF_results_annotated.rds")
 
 omics_type <- "Proteomics"
 n_cores <- 3
@@ -137,7 +137,7 @@ source(file.path(pipeline_repo, "outcomewas/main.R"), chdir = TRUE)
 stopifnot(
   exists("FAST_outcome_WAS"),
   exists("FAST_outcome_WAS_reports"),
-  exists("get_annotated_outcome_effects"),
+  exists("get_annotated_results"),
   exists("pheno"),
   exists("omics"),
   exists("covariates")
@@ -172,15 +172,15 @@ protein_annotation <- read.csv(
   check.names = FALSE
 )
 
-annotated_tables <- get_annotated_outcome_effects(
+annotated_results <- get_annotated_results(
   results = results,
   protein_annotation = protein_annotation,
   fu_labels = fu_labels
 )
-saveRDS(annotated_tables, annotated_tables_path)
+saveRDS(annotated_results, annotated_results_path)
 
 cat("DONE protein annotation: ", as.character(Sys.time()), "\n",
-    "Annotated tables: ", annotated_tables_path, "\n",
+    "Annotated results: ", annotated_results_path, "\n",
     file = log_file, append = TRUE, sep = "")
 
 cat("DONE analysis: ", as.character(Sys.time()), "\n",

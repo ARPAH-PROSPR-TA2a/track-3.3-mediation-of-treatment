@@ -291,30 +291,33 @@ Additional columns:
 
 ---
 
-### Optional annotated proteomics tables
+### Optional annotated proteomics results
 
-Protein annotation is a separate post-processing step for `outcome_effects`.
-It does not change the object returned by `FAST_outcome_WAS()`, any
-`coefficients` table, or the object returned by `FAST_outcome_WAS_reports()`.
+Protein annotation is a separate post-processing step for the object returned
+by `FAST_outcome_WAS()`. It returns an annotated copy without changing the input
+object and does not apply to the separate object returned by
+`FAST_outcome_WAS_reports()`.
 
 ```r
-get_annotated_outcome_effects(
+get_annotated_results(
   results,
   protein_annotation,
   fu_labels = NULL
 )
 ```
 
-`results` must be an OutcomeWAS result object. The function traverses `change`
-and `level`, every available `all`, `male`, and `female` stratum, and every
-observed follow-up. It returns one named table per analysis, stratum, and FU;
-`NULL` strata are skipped. Follow-ups are not restricted to `1:4`.
+`results` must be an OutcomeWAS result object. The function returns the same
+nested result topology: `analysis_change` and `analysis_level`, each containing
+`all`, `male`, and `female`, and each non-`NULL` stratum containing its
+`coefficients` and `outcome_effects`. `NULL` strata and any other result fields
+are preserved. Both result tables are annotated, and their rows for all observed
+follow-ups remain together rather than being split into per-FU tables.
 
 `protein_annotation` is a data frame requiring these columns:
 
 | Column | Role |
 |:---|:---|
-| `AptName` | Unique translation key matched to `outcome_effects$ANALYTE_NAME` |
+| `AptName` | Unique translation key matched to each result table's `ANALYTE_NAME` |
 | `SomaId` | SomaScan identifier |
 | `TargetFullName` | Full target name |
 | `Target` | Short target name |
@@ -329,8 +332,8 @@ and unique; violations are errors because they would make the annotation join
 ambiguous. Source column names must be unique and cannot reuse an output
 annotation field or `FU_LABEL`. The join preserves the OutcomeWAS row order and
 row count. Analytes without an `AptName` match remain in the output with `NA`
-annotation fields and produce a warning. If an output table has no matched
-analytes, the function stops. Translation rows unused by an output table are
+annotation fields and produce a warning. If either table has no matched analytes
+within an FU, the function stops. Translation rows unused by a result table are
 allowed.
 
 `fu_labels`, when supplied, is a named character vector whose names are the
@@ -340,15 +343,15 @@ character representations of `FU`, for example:
 c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 ```
 
-It must cover every FU returned by the call. It supplies the `FU_LABEL` field
-and the follow-up portion of names in the returned list. This explicit mapping
-supports arbitrary follow-up values without imposing CALERIE's four-visit
-convention. When `fu_labels = NULL`, `FU_LABEL` is omitted and list names use
-`FU` plus the integer value, such as `change_all_FU1`.
+Its names must be unique positive-integer FU values and its values must be
+nonblank labels. Label values may repeat. It must cover every FU in each table
+and supplies the row-wise `FU_LABEL` field. This explicit mapping supports
+arbitrary follow-up values without imposing CALERIE's four-visit convention.
+When `fu_labels = NULL`, `FU_LABEL` is omitted.
 
-For continuous outcomes with `fu_labels` supplied, each annotated table has
-exactly these 15 columns, in the same order as Track 1.1.1 annotated
-treatment-effect tables:
+For continuous outcomes with `fu_labels` supplied, each annotated
+`outcome_effects` table has exactly these 15 columns, in the same order as Track
+1.1.1 annotated treatment-effect tables:
 
 ```text
 ANALYTE_NAME
@@ -370,17 +373,54 @@ BH_P_VALUE
 
 Without `fu_labels`, the continuous table omits `FU_LABEL` and has 14 columns.
 For time-to-event outcomes, the same contract also contains `HAZARD_RATIO`
-immediately after `EFFECT_SIZE`. The function returns the named list without
-writing files; callers save it explicitly when needed:
+immediately after `EFFECT_SIZE`. All source columns following `FU` retain their
+original relative order, so any additional fields are preserved.
+
+For `coefficients`, annotation is placed before the original coefficient
+fields. With labels, the standard continuous order is:
+
+```text
+ANALYTE_NAME
+SomaId
+TargetFullName
+Target
+UniProt
+EntrezGeneID
+EntrezGeneSymbol
+Uniprot_Unique
+Symbol_Unique
+FU
+FU_LABEL
+COEFFICIENT
+N_OBS
+EFFECT_SIZE
+SE
+P_VALUE
+BH_P_VALUE
+```
+
+Time-to-event coefficient tables retain `N_EVENTS` and `HAZARD_RATIO` in their
+original relative positions. Any other source columns are also retained in
+their original relative order after `FU` or `FU_LABEL`. Every coefficient row,
+including adjustment terms, receives the annotation for the analyte whose model
+produced that row.
+
+`get_annotated_results()` performs no file I/O. Callers choose whether to save
+the returned object:
 
 ```r
-annotated_tables <- get_annotated_outcome_effects(
+annotated_results <- get_annotated_results(
   results,
   protein_annotation,
   fu_labels = fu_labels
 )
-saveRDS(annotated_tables, "annotated_outcome_effect_tables.rds")
+saveRDS(annotated_results, "Proteomics_3.3OWAS_INF_results_annotated.rds")
 ```
+
+The CALERIE INF and MetS runners save their annotated copies separately as
+`Proteomics_3.3OWAS_INF_results_annotated.rds` and
+`Proteomics_3.3OWAS_MetS_results_annotated.rds`, leaving the original results
+RDS files intact.
 
 ---
 
