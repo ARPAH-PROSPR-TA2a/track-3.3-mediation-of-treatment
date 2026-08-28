@@ -16,7 +16,7 @@ translation_path <- path.expand("~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_clea
 
 pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
 out_dir <- path.expand("~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF")
-annotated_tables_path <- file.path(out_dir, "annotated_outcome_effect_tables.rds")
+annotated_tables_path <- file.path(out_dir, "Proteomics_3.3OWAS_INF_results_annotated.rds")
 
 omics_type <- "Proteomics"
 n_cores <- 3
