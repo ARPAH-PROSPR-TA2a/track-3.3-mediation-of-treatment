@@ -1,8 +1,8 @@
-translation_file <- "~/CALERIE/data/Proteomics/CALERIE_cleaned_protein_translation_table.csv"
-results_file <- "~/CALERIE/Proteomics/OutcomeWAS/3.3/INF_24mo/output/results.rds"
-reports_file <- "~/CALERIE/Proteomics/OutcomeWAS/3.3/INF_24mo/output/reports.rds"
-annotated_results_file <- "~/CALERIE/Proteomics/OutcomeWAS/3.3/INF_24mo/output/results_annotated.rds"
-annotated_reports_file <- "~/CALERIE/Proteomics/OutcomeWAS/3.3/INF_24mo/output/reports_annotated.rds"
+translation_file <- "~/FAST/Data/CALERIE/Raw/Proteomics/CALERIE_cleaned_protein_translation_table.csv"
+results_file <- "~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF/Proteomics_3.3OWAS_INF_results.rds"
+reports_file <- "~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF/Proteomics_3.3OWAS_INF_reports.rds"
+annotated_results_file <- "~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF/Proteomics_3.3OWAS_INF_results_annotated.rds"
+annotated_reports_file <- "~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF/Proteomics_3.3OWAS_INF_reports_annotated.rds"
 
 annotation_cols <- c(
   "AptName",
