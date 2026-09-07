@@ -1,3 +1,10 @@
+Sys.setenv(
+  OMP_NUM_THREADS = "1",
+  OPENBLAS_NUM_THREADS = "1",
+  MKL_NUM_THREADS = "1",
+  VECLIB_MAXIMUM_THREADS = "1"
+)
+
 library(dplyr)
 library(forcats)
 library(readr)
@@ -19,16 +26,36 @@ out_dir <- path.expand("~/FAST/Outputs/3.3/Proteomics_3.3OWAS_INF")
 annotated_results_path <- file.path(out_dir, "Proteomics_3.3OWAS_INF_results_annotated.rds")
 
 omics_type <- "Proteomics"
-n_cores <- 3
+n_cores <- 47 # 48-vCPU production host; leave one core for the OS
+checkpoint_batch_size <- 2000L
 fu_labels <- c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 log_file <- file.path(out_dir, "run.log")
+options(track33.progress_log = log_file)
+
+log_status <- function(text) {
+  line <- paste0(
+    "[3.3] ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+    " | ", text
+  )
+  message(line)
+  cat(line, "\n", file = log_file, append = TRUE, sep = "")
+}
+
+run_started <- proc.time()[["elapsed"]]
+log_status("START Proteomics run")
+log_status(paste0(
+  "parallel configuration: n_cores=", n_cores,
+  "; BLAS/OpenMP threads per process=1"
+))
 
 
 # -----------------------------
 # Read raw inputs
 # -----------------------------
+input_started <- proc.time()[["elapsed"]]
+log_status("loading raw inputs (serial)")
 omics_raw <- read.csv(
   omics_raw_path,
   header = TRUE,
@@ -48,6 +75,14 @@ PCs <- read_excel(genetic_pcs_path)
 outcome <- read_csv(outcome_path, col_names = TRUE, show_col_types = FALSE) |>
   select(-1) |>
   rename(SUBJECT_ID = DEID, OUTCOME = INF_Score)
+
+log_status(paste0(
+  "raw inputs loaded: ", nrow(omics_raw), " proteomics samples, ",
+  nrow(pheno_raw), " phenotype rows, ", nrow(outcome), " outcome rows (",
+  round(proc.time()[["elapsed"]] - input_started, 1), " sec)"
+))
+preparation_started <- proc.time()[["elapsed"]]
+log_status("input QC and table preparation starting (serial)")
 
 stopifnot(!any(is.na(omics_raw)))
 stopifnot(!any(duplicated(colnames(omics_raw))))
@@ -143,11 +178,20 @@ stopifnot(
   exists("covariates")
 )
 
+log_status(paste0(
+  "inputs ready: ", nrow(omics), " analytes, ", nrow(pheno),
+  " matched phenotype rows (",
+  round(proc.time()[["elapsed"]] - preparation_started, 1), " sec)"
+))
+
 # -----------------------------
 # Analysis
 # -----------------------------
-cat("START Proteomics run: ", as.character(Sys.time()), "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status(paste0(
+  "analysis call starting: n_cores=", n_cores,
+  ", checkpoint batch size=", checkpoint_batch_size,
+  "; parallel work occurs inside uncached batches"
+))
 
 results <- FAST_outcome_WAS(
   pheno = pheno,
@@ -155,7 +199,9 @@ results <- FAST_outcome_WAS(
   omics_type = omics_type,
   additional_covariates = covariates,
   n_cores = n_cores,
-  checkpoint_dir = file.path(out_dir, "Proteomics_3.3OWAS_INF_checkpoints")
+  checkpoint_dir = file.path(out_dir, "Proteomics_3.3OWAS_INF_checkpoints"),
+  checkpoint_batch_size = checkpoint_batch_size,
+  verbose = TRUE
 )
 
 saveRDS(
@@ -163,8 +209,9 @@ saveRDS(
   file = file.path(out_dir, "Proteomics_3.3OWAS_INF_results.rds")
 )
 
-cat("START protein annotation: ", as.character(Sys.time()), "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status("analysis model fitting complete; raw results saved")
+
+log_status("START protein annotation")
 
 protein_annotation <- read.csv(
   translation_path,
@@ -179,24 +226,23 @@ annotated_results <- get_annotated_results(
 )
 saveRDS(annotated_results, annotated_results_path)
 
-cat("DONE protein annotation: ", as.character(Sys.time()), "\n",
-    "Annotated results: ", annotated_results_path, "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status(paste0(
+  "DONE protein annotation; annotated results: ", annotated_results_path
+))
 
-cat("DONE analysis: ", as.character(Sys.time()), "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status("DONE analysis")
 
 # -----------------------------
 # Reports
 # -----------------------------
-cat("START report run: ", as.character(Sys.time()), "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status("START report run")
 
 reports <- FAST_outcome_WAS_reports(
   pheno = pheno,
   omics = omics,
   omics_type = omics_type,
-  additional_covariates = covariates
+  additional_covariates = covariates,
+  verbose = TRUE
 )
 
 saveRDS(
@@ -204,8 +250,7 @@ saveRDS(
   file = file.path(out_dir, "Proteomics_3.3OWAS_INF_reports.rds")
 )
 
-cat("DONE reports: ", as.character(Sys.time()), "\n",
-    file = log_file, append = TRUE, sep = "")
+log_status("DONE reports; report output saved")
 
 # -----------------------------
 # Plotting
@@ -218,14 +263,23 @@ fig_level <- file.path(out_dir, "Figures", "level")
 dir.create(fig_change, recursive = TRUE, showWarnings = FALSE)
 dir.create(fig_level, recursive = TRUE, showWarnings = FALSE)
 
+log_status("change-result plotting starting (serial)")
 generate_all_plots(
   results,
   figures_dir = fig_change,
   analysis = "analysis_change"
 )
+log_status("change-result plotting complete")
 
+log_status("level-result plotting starting (serial)")
 generate_all_plots(
   results,
   figures_dir = fig_level,
   analysis = "analysis_level"
 )
+log_status("level-result plotting complete")
+log_status(paste0(
+  "run complete (",
+  round(proc.time()[["elapsed"]] - run_started, 1),
+  " sec)"
+))

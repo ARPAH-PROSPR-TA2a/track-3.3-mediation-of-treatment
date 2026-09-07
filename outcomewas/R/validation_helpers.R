@@ -54,7 +54,7 @@
   }
 
   if (omics_type == "DNAm") {
-    message("DNAm: input should be M-values.")
+    message("DNAm: beta values or M-values are used on the supplied scale; no transformation is applied.")
   } else if (omics_type == "Metabolomics") {
     message("Metabolomics: inputs should be log2-transformed prior to analysis.")
   } else if (omics_type == "Proteomics") {
@@ -256,7 +256,8 @@
 }
 
 
-.validate_omics <- function(omics, pheno_list) {
+.validate_omics <- function(omics, pheno_list, verbose = FALSE,
+                            progress_every = 100000L) {
 
   if (is.matrix(omics)) {
     omics <- as.data.frame(omics)
@@ -291,6 +292,13 @@
 
   n_with_na <- 0
   n_with_nzv <- 0
+  n_analytes <- length(analyte_names)
+  quality_check_started <- proc.time()[["elapsed"]]
+
+  .log_33(
+    verbose,
+    paste0("omics quality checks: 0/", n_analytes, " analytes (serial)")
+  )
 
   for (i in seq_along(analyte_names)) {
     analyte_data <- as.numeric(omics_numeric[i, ])
@@ -302,7 +310,31 @@
     if (.is_near_zero_variance(analyte_data)) {
       n_with_nzv <- n_with_nzv + 1
     }
+
+    if (i < n_analytes && i %% progress_every == 0L) {
+      .log_33(
+        verbose,
+        sprintf(
+          "omics quality checks: %d/%d analytes (%.1f%%; %s)",
+          i,
+          n_analytes,
+          100 * i / n_analytes,
+          .format_duration_33(proc.time()[["elapsed"]] - quality_check_started)
+        )
+      )
+    }
   }
+
+  .log_33(
+    verbose,
+    paste0(
+      "omics quality checks: ", n_analytes, "/", n_analytes,
+      " analytes complete (", n_with_na, " with NA, ",
+      n_with_nzv, " near-zero variance; ",
+      .format_duration_33(proc.time()[["elapsed"]] - quality_check_started),
+      ")"
+    )
+  )
 
   if (n_with_na > 0) {
     warning(n_with_na, " analytes contain NA values")

@@ -57,7 +57,8 @@ results <- FAST_outcome_WAS(
   omics_type = "Proteomics",
   additional_covariates = c("agebl", "mbmi"),
   n_cores = 8,
-  checkpoint_dir = "checkpoints"
+  checkpoint_dir = "checkpoints",
+  verbose = TRUE
 )
 
 # View analysis results
@@ -89,6 +90,10 @@ head(results$analysis_level$all$outcome_effects)
   batches are reused when the same run is resumed.
 - **`checkpoint_batch_size`** (`integer`): Number of analytes per checkpoint
   batch. Default: `2000`. Only relevant when `checkpoint_dir` is set.
+- **`verbose`** (`logical`): If `TRUE`, emit `[3.3]` progress for validation,
+  response/stratum/FU work, checkpoint reuse, worker PIDs, failures, timing, and
+  completion. Default: `FALSE`. Set `options(track33.progress_log = "path")`
+  to append timestamped progress to a file as well as the console.
 
 ### Return Value
 
@@ -199,9 +204,13 @@ reports <- FAST_outcome_WAS_reports(
   pheno = pheno,
   omics = omics,
   omics_type = "Proteomics",
-  additional_covariates = c("agebl", "mbmi")
+  additional_covariates = c("agebl", "mbmi"),
+  verbose = TRUE
 )
 ```
+
+`verbose = TRUE` reports validation and summary-stage progress without changing
+the report calculations or return value.
 
 ### Return Value
 
@@ -242,9 +251,10 @@ checkpoints/
   ...
 ```
 
-Checkpoint files are tied to a specific analyte ordering and
-`checkpoint_batch_size`. Do not change the `omics` data or batch size between a
-run and its resume.
+Checkpoint files are tied to the inputs, outcome, covariates, visit coding,
+analyte ordering, and `checkpoint_batch_size`. Cached batches are loaded by
+file existence without checking those settings. Use a new checkpoint directory
+when any of them changes, including when switching from M-values to beta values.
 
 ## Data Format Requirements
 
@@ -296,6 +306,12 @@ sample_004  subj_002    1   0                0       10.1     62     30.7
 ```
 
 ### Omics Data
+
+DNAm beta values and M-values are used on the supplied scale; the pipeline
+does not transform or standardize them. The CALERIE beta runners use the same
+raw beta matrix and DNAm covariate files as the Track 1.1.1 beta runner. See
+[CALERIE DNAm beta runs](INPUTS_OUTPUTS.md#calerie-dnam-beta-runs) for paths,
+outputs, and launch commands.
 
 Omics data must be a data frame with:
 

@@ -242,8 +242,9 @@ family.
 Function: `.validate_omics_type()`
 
 - Enforces the accepted `omics_type` values.
-- Prints preprocessing reminders, such as DNAm M-values and log2-transformed
-  Proteomics/Metabolomics.
+- States that DNAm beta values or M-values are used on the supplied scale,
+  with no transformation, and reminds users to log2-transform
+  Proteomics/Metabolomics inputs.
 - Accepts `"other"` for non-omics analytes without printing a preprocessing
   reminder.
 

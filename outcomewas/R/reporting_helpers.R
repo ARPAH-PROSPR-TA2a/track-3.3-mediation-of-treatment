@@ -230,7 +230,8 @@
 
 
 .generate_reports <- function(pheno_list, omics_list, additional_covariates = NULL,
-                              outcome_type = c("continuous", "tte")) {
+                              outcome_type = c("continuous", "tte"),
+                              verbose = FALSE) {
 
   outcome_type <- match.arg(outcome_type)
 
@@ -238,6 +239,12 @@
 
   for (dataset in c("all", "male", "female")) {
     if (is.null(pheno_list[[dataset]])) next
+
+    stratum_started <- proc.time()[["elapsed"]]
+    .log_33(
+      verbose,
+      paste0("reports variable summaries/", dataset, " starting (serial)")
+    )
 
     pheno_df <- pheno_list[[dataset]]
     omics_df <- omics_list[[dataset]]
@@ -254,6 +261,18 @@
 
         if (nrow(cell_pheno) == 0) next
 
+        cell_started <- proc.time()[["elapsed"]]
+        cell_label <- paste0(
+          "reports variable summaries/", dataset, "/FU", fu, "/Tx", tx
+        )
+        .log_33(
+          verbose,
+          paste0(
+            cell_label, " starting: ", nrow(omics_df), " analytes, ",
+            nrow(cell_pheno), " samples (serial)"
+          )
+        )
+
         cell_reports[[paste0("omics", cell_key)]] <-
           .create_omics_data_report(cell_pheno$SAMPLE_ID, omics_df)
 
@@ -261,12 +280,28 @@
           cell_reports[[paste0("covariates", cell_key)]] <-
             .create_addx_covariate_report(cell_pheno, additional_covariates)
         }
+
+        .log_33(
+          verbose,
+          paste0(
+            cell_label, " complete (",
+            .format_duration_33(proc.time()[["elapsed"]] - cell_started), ")"
+          )
+        )
       }
     }
 
     variable_summaries[[dataset]] <- cell_reports
+    .log_33(
+      verbose,
+      paste0(
+        "reports variable summaries/", dataset, " complete (",
+        .format_duration_33(proc.time()[["elapsed"]] - stratum_started), ")"
+      )
+    )
   }
 
+  .log_33(verbose, "reports outcome summary (serial)")
   outcome_summary <- if (outcome_type == "continuous") {
     .create_continuous_outcome_report(pheno_list$all)
   } else {
@@ -279,6 +314,7 @@
     outcome_summary = outcome_summary
   )
 
+  .log_33(verbose, "reports phenotype summary (serial)")
   list(
     pheno_summary = .create_pheno_data_report(pheno_list$all),
     variable_summaries = variable_summaries,

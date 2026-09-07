@@ -97,7 +97,13 @@
                                          additional_covariates = NULL,
                                          response_type = c("change", "level"),
                                          checkpoint_dir = NULL,
-                                         checkpoint_batch_size = 2000L) {
+                                         checkpoint_batch_size = 2000L,
+                                         verbose = FALSE,
+                                         progress_label = paste(
+                                           response_type,
+                                           paste0("FU", fu_level),
+                                           sep = "/"
+                                         )) {
 
   response_type <- match.arg(response_type)
 
@@ -129,6 +135,29 @@
   batches <- split(seq_along(analyte_names),
                    ceiling(seq_along(analyte_names) / checkpoint_batch_size))
   all_results <- vector("list", length(analyte_names))
+  checkpoint_files <- if (!is.null(checkpoint_dir)) {
+    file.path(checkpoint_dir, paste0("batch_", seq_along(batches), ".rds"))
+  } else {
+    character(0)
+  }
+  n_cached <- sum(file.exists(checkpoint_files))
+  n_pending <- length(batches) - n_cached
+  completed_pending <- 0L
+  pending_elapsed <- 0
+  new_failures <- 0L
+  reported_worker_pids <- FALSE
+
+  .log_33(
+    verbose,
+    paste0(
+      progress_label, ": ", length(analyte_names), " analytes, ",
+      length(batches), " batches (", n_cached, " cached, ",
+      n_pending, " pending)"
+    )
+  )
+  if (length(batches) > 0L && n_pending == 0L) {
+    .log_33(verbose, paste0(progress_label, ": all batches cached; no workers launched"))
+  }
 
   for (b in seq_along(batches)) {
     batch <- batches[[b]]
@@ -139,14 +168,26 @@
       next
     }
 
+    batch_started <- proc.time()[["elapsed"]]
+
     batch_items <- lapply(batch, function(i) list(
       analyte_name = analyte_names[i],
       fu_values = as.numeric(omics_df[i, shared_samples]),
       baseline_vals = omics_baseline_matrix[i, baseline_col_idx]
     ))
 
-    batch_results <- furrr::future_map(batch_items, function(item) {
-      tryCatch({
+    n_workers <- min(future::nbrOfWorkers(), length(batch_items))
+    .log_33(
+      verbose,
+      sprintf(
+        "%s batch %d/%d: dispatching %d analytes across up to %d worker%s",
+        progress_label, b, length(batches), length(batch), n_workers,
+        if (n_workers == 1L) "" else "s"
+      )
+    )
+
+    worker_results <- furrr::future_map(batch_items, function(item) {
+      result <- tryCatch({
         md <- model_data
         if (response_type == "change") {
           md$analyte <- item$fu_values - item$baseline_vals
@@ -190,7 +231,37 @@
         warning("Error processing analyte '", item$analyte_name, "' at FU=", fu_level, ": ", e$message)
         NULL
       })
+
+      list(
+        result = result,
+        worker_pid = Sys.getpid(),
+        failed = is.null(result)
+      )
     }, .options = furrr::furrr_options(seed = TRUE))
+
+    worker_pids <- sort(unique(vapply(
+      worker_results,
+      function(result) result$worker_pid,
+      integer(1)
+    )))
+    batch_failures <- sum(vapply(
+      worker_results,
+      function(result) result$failed,
+      logical(1)
+    ))
+    batch_results <- lapply(worker_results, `[[`, "result")
+    new_failures <- new_failures + batch_failures
+
+    if (!reported_worker_pids) {
+      .log_33(
+        verbose,
+        paste0(
+          progress_label, " worker PIDs observed: ",
+          paste(worker_pids, collapse = ", ")
+        )
+      )
+      reported_worker_pids <- TRUE
+    }
 
     if (!is.null(batch_file)) {
       saveRDS(batch_results, paste0(batch_file, ".tmp"))
@@ -198,6 +269,44 @@
     }
 
     all_results[batch] <- batch_results
+
+    completed_pending <- completed_pending + 1L
+    remaining_pending <- n_pending - completed_pending
+    batch_elapsed <- proc.time()[["elapsed"]] - batch_started
+    pending_elapsed <- pending_elapsed + batch_elapsed
+    eta_text <- if (remaining_pending > 0L) {
+      estimated_remaining <- pending_elapsed / completed_pending * remaining_pending
+      paste0(
+        "; estimated ", .format_duration_33(estimated_remaining),
+        " remaining for ", remaining_pending, " pending batch",
+        if (remaining_pending == 1L) "" else "es"
+      )
+    } else {
+      ""
+    }
+
+    .log_33(
+      verbose,
+      paste0(
+        progress_label, " batch ", b, "/", length(batches),
+        " complete: ", length(worker_pids), " worker PID",
+        if (length(worker_pids) == 1L) "" else "s",
+        ", ", batch_failures, " failure",
+        if (batch_failures == 1L) "" else "s",
+        ", ", .format_duration_33(batch_elapsed),
+        eta_text
+      )
+    )
+  }
+
+  if (new_failures > 0L) {
+    .log_33(
+      verbose,
+      paste0(
+        progress_label, ": ", new_failures, " newly attempted analyte",
+        if (new_failures == 1L) "" else "s", " failed"
+      )
+    )
   }
 
   all_results <- Filter(Negate(is.null), all_results)
@@ -222,7 +331,13 @@
                                   additional_covariates = NULL,
                                   response_type = c("change", "level"),
                                   checkpoint_dir = NULL,
-                                  checkpoint_batch_size = 2000L) {
+                                  checkpoint_batch_size = 2000L,
+                                  verbose = FALSE,
+                                  progress_label = paste(
+                                    response_type,
+                                    paste0("FU", fu_level),
+                                    sep = "/"
+                                  )) {
 
   response_type <- match.arg(response_type)
 
@@ -259,6 +374,29 @@
   batches <- split(seq_along(analyte_names),
                    ceiling(seq_along(analyte_names) / checkpoint_batch_size))
   all_results <- vector("list", length(analyte_names))
+  checkpoint_files <- if (!is.null(checkpoint_dir)) {
+    file.path(checkpoint_dir, paste0("batch_", seq_along(batches), ".rds"))
+  } else {
+    character(0)
+  }
+  n_cached <- sum(file.exists(checkpoint_files))
+  n_pending <- length(batches) - n_cached
+  completed_pending <- 0L
+  pending_elapsed <- 0
+  new_failures <- 0L
+  reported_worker_pids <- FALSE
+
+  .log_33(
+    verbose,
+    paste0(
+      progress_label, ": ", length(analyte_names), " analytes, ",
+      length(batches), " batches (", n_cached, " cached, ",
+      n_pending, " pending)"
+    )
+  )
+  if (length(batches) > 0L && n_pending == 0L) {
+    .log_33(verbose, paste0(progress_label, ": all batches cached; no workers launched"))
+  }
 
   for (b in seq_along(batches)) {
     batch <- batches[[b]]
@@ -269,14 +407,26 @@
       next
     }
 
+    batch_started <- proc.time()[["elapsed"]]
+
     batch_items <- lapply(batch, function(i) list(
       analyte_name = analyte_names[i],
       fu_values = as.numeric(omics_df[i, shared_samples]),
       baseline_vals = omics_baseline_matrix[i, baseline_col_idx]
     ))
 
-    batch_results <- furrr::future_map(batch_items, function(item) {
-      tryCatch({
+    n_workers <- min(future::nbrOfWorkers(), length(batch_items))
+    .log_33(
+      verbose,
+      sprintf(
+        "%s batch %d/%d: dispatching %d analytes across up to %d worker%s",
+        progress_label, b, length(batches), length(batch), n_workers,
+        if (n_workers == 1L) "" else "s"
+      )
+    )
+
+    worker_results <- furrr::future_map(batch_items, function(item) {
+      result <- tryCatch({
         md <- model_data
         if (response_type == "change") {
           md$analyte <- item$fu_values - item$baseline_vals
@@ -324,7 +474,37 @@
         warning("Error processing analyte '", item$analyte_name, "' at FU=", fu_level, ": ", e$message)
         NULL
       })
+
+      list(
+        result = result,
+        worker_pid = Sys.getpid(),
+        failed = is.null(result)
+      )
     }, .options = furrr::furrr_options(seed = TRUE, packages = "survival"))
+
+    worker_pids <- sort(unique(vapply(
+      worker_results,
+      function(result) result$worker_pid,
+      integer(1)
+    )))
+    batch_failures <- sum(vapply(
+      worker_results,
+      function(result) result$failed,
+      logical(1)
+    ))
+    batch_results <- lapply(worker_results, `[[`, "result")
+    new_failures <- new_failures + batch_failures
+
+    if (!reported_worker_pids) {
+      .log_33(
+        verbose,
+        paste0(
+          progress_label, " worker PIDs observed: ",
+          paste(worker_pids, collapse = ", ")
+        )
+      )
+      reported_worker_pids <- TRUE
+    }
 
     if (!is.null(batch_file)) {
       saveRDS(batch_results, paste0(batch_file, ".tmp"))
@@ -332,6 +512,44 @@
     }
 
     all_results[batch] <- batch_results
+
+    completed_pending <- completed_pending + 1L
+    remaining_pending <- n_pending - completed_pending
+    batch_elapsed <- proc.time()[["elapsed"]] - batch_started
+    pending_elapsed <- pending_elapsed + batch_elapsed
+    eta_text <- if (remaining_pending > 0L) {
+      estimated_remaining <- pending_elapsed / completed_pending * remaining_pending
+      paste0(
+        "; estimated ", .format_duration_33(estimated_remaining),
+        " remaining for ", remaining_pending, " pending batch",
+        if (remaining_pending == 1L) "" else "es"
+      )
+    } else {
+      ""
+    }
+
+    .log_33(
+      verbose,
+      paste0(
+        progress_label, " batch ", b, "/", length(batches),
+        " complete: ", length(worker_pids), " worker PID",
+        if (length(worker_pids) == 1L) "" else "s",
+        ", ", batch_failures, " failure",
+        if (batch_failures == 1L) "" else "s",
+        ", ", .format_duration_33(batch_elapsed),
+        eta_text
+      )
+    )
+  }
+
+  if (new_failures > 0L) {
+    .log_33(
+      verbose,
+      paste0(
+        progress_label, ": ", new_failures, " newly attempted analyte",
+        if (new_failures == 1L) "" else "s", " failed"
+      )
+    )
   }
 
   all_results <- Filter(Negate(is.null), all_results)
@@ -355,7 +573,9 @@
                               additional_covariates = NULL,
                               response_type = c("change", "level"),
                               checkpoint_dir = NULL,
-                              checkpoint_batch_size = 2000L) {
+                              checkpoint_batch_size = 2000L,
+                              verbose = FALSE,
+                              progress_label = response_type) {
 
   response_type <- match.arg(response_type)
 
@@ -366,13 +586,32 @@
   all_coefficients <- list()
   all_outcome_effects <- list()
 
+  .log_33(
+    verbose,
+    paste0(
+      progress_label, ": ", length(fu_levels), " follow-up level",
+      if (length(fu_levels) == 1L) "" else "s", " to process"
+    )
+  )
+
   for (fu_level in fu_levels) {
+    fu_started <- proc.time()[["elapsed"]]
+    fu_progress_label <- paste0(progress_label, "/FU", fu_level)
     pheno_analysis <- pheno_df[as.integer(as.character(pheno_df$FU)) == fu_level, ]
     complete_subjects <- intersect(pheno_baseline_all$SUBJECT_ID, pheno_analysis$SUBJECT_ID)
 
     if (length(complete_subjects) == 0) {
+      .log_33(verbose, paste0(fu_progress_label, ": skipped; no complete subjects"))
       next
     }
+
+    .log_33(
+      verbose,
+      paste0(
+        fu_progress_label, " starting: ", length(complete_subjects),
+        " complete subjects; outcome=", outcome_type
+      )
+    )
 
     pheno_baseline <- pheno_baseline_all[pheno_baseline_all$SUBJECT_ID %in% complete_subjects, ]
     pheno_analysis <- pheno_analysis[pheno_analysis$SUBJECT_ID %in% complete_subjects, ]
@@ -396,7 +635,9 @@
         additional_covariates = additional_covariates,
         response_type = response_type,
         checkpoint_dir = fu_checkpoint_dir,
-        checkpoint_batch_size = checkpoint_batch_size
+        checkpoint_batch_size = checkpoint_batch_size,
+        verbose = verbose,
+        progress_label = fu_progress_label
       )
     } else {
       .perform_tte_analysis(
@@ -408,16 +649,34 @@
         additional_covariates = additional_covariates,
         response_type = response_type,
         checkpoint_dir = fu_checkpoint_dir,
-        checkpoint_batch_size = checkpoint_batch_size
+        checkpoint_batch_size = checkpoint_batch_size,
+        verbose = verbose,
+        progress_label = fu_progress_label
       )
     }
 
     if (is.null(fu_results)) {
+      .log_33(
+        verbose,
+        paste0(
+          fu_progress_label, " complete: no estimable results (",
+          .format_duration_33(proc.time()[["elapsed"]] - fu_started), ")"
+        )
+      )
       next
     }
 
     all_coefficients[[paste0("FU", fu_level)]] <- fu_results$coefficients
     all_outcome_effects[[paste0("FU", fu_level)]] <- fu_results$outcome_effects
+
+    .log_33(
+      verbose,
+      paste0(
+        fu_progress_label, " complete: ", nrow(fu_results$outcome_effects),
+        " outcome-effect rows (",
+        .format_duration_33(proc.time()[["elapsed"]] - fu_started), ")"
+      )
+    )
   }
 
   if (length(all_coefficients) == 0 || length(all_outcome_effects) == 0) {
@@ -428,6 +687,11 @@
   outcome_effects <- do.call(rbind, all_outcome_effects)
   row.names(coefficients) <- NULL
   row.names(outcome_effects) <- NULL
+
+  .log_33(
+    verbose,
+    paste0(progress_label, ": model batches complete; applying BH correction (serial)")
+  )
 
   coefficients <- .apply_multiple_testing_correction(
     coefficients,
@@ -497,13 +761,18 @@
                                      response_type = c("change", "level"),
                                      filtered_probes = NULL,
                                      checkpoint_dir = NULL,
-                                     checkpoint_batch_size = 2000L) {
+                                     checkpoint_batch_size = 2000L,
+                                     verbose = FALSE) {
 
   response_type <- match.arg(response_type)
   outputs <- list(all = NULL, male = NULL, female = NULL)
 
   for (dataset in c("all", "male", "female")) {
     if (is.null(pheno_list[[dataset]])) next
+    stratum_started <- proc.time()[["elapsed"]]
+    progress_label <- paste(response_type, dataset, sep = "/")
+
+    .log_33(verbose, paste0(progress_label, " starting"))
 
     stratum_checkpoint_dir <- if (!is.null(checkpoint_dir)) {
       file.path(checkpoint_dir, response_type, dataset)
@@ -519,11 +788,20 @@
       additional_covariates,
       response_type,
       stratum_checkpoint_dir,
-      checkpoint_batch_size
+      checkpoint_batch_size,
+      verbose = verbose,
+      progress_label = progress_label
     )
 
     if (is.null(analysis_results)) {
       outputs[[dataset]] <- NULL
+      .log_33(
+        verbose,
+        paste0(
+          progress_label, " complete: no estimable results (",
+          .format_duration_33(proc.time()[["elapsed"]] - stratum_started), ")"
+        )
+      )
       next
     }
 
@@ -531,9 +809,21 @@
       coefficients = analysis_results$coefficients,
       outcome_effects = analysis_results$outcome_effects
     )
+
+    .log_33(
+      verbose,
+      paste0(
+        progress_label, " complete (",
+        .format_duration_33(proc.time()[["elapsed"]] - stratum_started), ")"
+      )
+    )
   }
 
   if (!is.null(filtered_probes)) {
+    .log_33(
+      verbose,
+      paste0(response_type, ": applying filtered-probe BH correction (serial)")
+    )
     outputs <- .add_filtered_bh_correction(outputs, filtered_probes)
   }
 

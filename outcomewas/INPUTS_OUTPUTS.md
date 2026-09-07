@@ -119,6 +119,20 @@ Sample matching:
 - Analytes with missing values or near-zero variance generate warnings but are
   not dropped during validation.
 
+DNAm scale:
+
+- Beta values and M-values are analyzed on the supplied scale. The core does
+  not convert, clip, or standardize methylation values.
+- The CALERIE beta runners require finite values in `[0, 1]`. Their
+  `analysis_change` uses follow-up beta minus baseline beta; `analysis_level`
+  uses follow-up beta. Both adjust for baseline beta.
+- For a continuous outcome, `EFFECT_SIZE` is in outcome units per one-unit
+  increase in beta (or beta change). Multiply the estimate and SE by `0.01`
+  to express an effect per one percentage point of methylation.
+- Keep the methylation scale and visit coding consistent with the Track 1.1.1
+  treatment results when preparing inputs for mediation. OutcomeWAS returns
+  `outcome_effects`; Track 1.1.1 returns `treatment_effects`.
+
 ---
 
 ### Other Input Arguments
@@ -148,6 +162,15 @@ checkpoint_dir/
 
 - `checkpoint_batch_size`: `FAST_outcome_WAS()` only. Number of analytes per
   checkpoint batch. Default: `2000`.
+- Reuse a checkpoint directory only for the same inputs, outcome, covariates,
+  visit coding, analyte order, and batch size. Checkpoints are loaded by file
+  existence and do not validate those settings. Beta runs must use separate
+  directories from M-value runs.
+- `verbose`: Logical flag accepted by both public functions. Default: `FALSE`.
+  When `TRUE`, emits `[3.3]` validation and stage progress. Analysis logs include
+  response/stratum/FU labels, checkpoint reuse, worker PIDs, failures, and
+  timing/ETA. Set `options(track33.progress_log = "path")` to also append
+  timestamped messages to a file.
 
 ---
 
@@ -532,6 +555,106 @@ Time-to-event outcome summary columns:
 - `TIME_MEDIAN`
 - `TIME_MIN`
 - `TIME_MAX`
+
+---
+
+## CALERIE DNAm Beta Runs
+
+The INF and MetS runners follow the current Track 1.1.1
+`CALERIE/DNAm/EWAS_DNAm/WTM_run_DNAm_betas.R` input layout and use the
+repository at `~/FAST/GitHub/track-3.3`.
+
+### Input files
+
+The shared DNAm files are under `~/FAST/Data/CALERIE/Raw/DNAm/`:
+
+| File | Used for |
+|:---|:---|
+| `GRSet_fully_filtered_bmiq_chunk.rds` | Numeric beta matrix, CpGs in row names and sample barcodes in column names; finite values in `[0, 1]` |
+| `CALERIE_CPR_processed_pheno.rds` | Participant/sample/visit crosswalk, treatment, sex, age, site, BMI stratum, and genetic PCs |
+| `CALERIE_control_pcs_rgset_goodsamples.csv` | Control-probe PCs matched through `filenames` to phenotype `Barcode` |
+| `Cell_PCs.csv` | Cell-composition PCs matched through `SAMPLE_ID` |
+
+The outcome files are under `~/FAST/Data/CALERIE/Raw/`:
+
+| Runner | File | Columns selected |
+|:---|:---|:---|
+| INF | `INF_CALERIE_24mo_Outcome.csv` | `DEID` becomes `SUBJECT_ID`; `INF_Score` becomes `OUTCOME` |
+| MetS | `MetS_CALERIE_24mo_Outcome.csv` | `DEID` becomes `SUBJECT_ID`; `MetS_Score` becomes `OUTCOME` |
+
+Each outcome file must contain one row per subject. Its 24-month score is
+joined to that subject's methylation visits. An optional CSV row-index column
+is ignored by selecting the outcome columns by name.
+
+The existing 24-month-only analysis is retained: the runners keep `Time_Point`
+values `base` and `24` and encode them as `FU = 0` and `FU = 1`.
+
+| Methylation visit | These OutcomeWAS runners | Track 1.1.1 beta runner |
+|:---|:---|:---|
+| Baseline | `FU = 0` | `FU = 0` |
+| 12 months | Excluded | `FU = 1` |
+| 24 months | `FU = 1` | `FU = 2` |
+
+Before passing these results to `FAST_mediation()`, select the 24-month
+Track 1.1.1 treatment effects (`FU = 2`) and align the follow-up keys explicitly
+in a copy of the input results. A direct join on the current numeric `FU`
+values would incorrectly pair 24-month OutcomeWAS with 12-month treatment
+effects. The runners do not perform this downstream mapping.
+
+As in the 1.1.1 beta runner, the model uses genetic PCs `snppc1.x`–`snppc3.x`,
+`agebl`, `deidsite`, `bmistrat`, cell PCs `cell_PC1`–`cell_PC4`, and control
+PCs `PC1`–`PC3`. Age and genetic PCs are standardized before outcome-specific
+filtering. Samples must have methylation and complete required phenotype,
+covariate, and outcome values. Baseline/follow-up pairing is then enforced by
+the pipeline. The runners use the existing cell PCs directly and do not
+require the unused raw cell-count columns or run the 1.1.1 DunedinPACE helper.
+
+### Output files
+
+Each outcome has a dedicated directory under `~/FAST/Outputs/3.3/`:
+
+| Outcome | Directory and filename prefix |
+|:---|:---|
+| INF | `DNAm_betas_3.3OWAS_INF` |
+| MetS | `DNAm_betas_3.3OWAS_MetS` |
+
+Within each directory, `<prefix>` is the value in the table above:
+
+```text
+<prefix>_results.rds
+<prefix>_reports.rds
+<prefix>_checkpoints/{change,level}/{all,male,female}/FU<n>/batch_<n>.rds
+run.log
+Figures/change/
+Figures/level/
+```
+
+The results and report RDS objects use the nested schemas documented above.
+Result estimates and report methylation summaries remain on the beta scale.
+These paths are separate from legacy M-value runs and from the 1.1.1 results.
+Resume only an unchanged run; changed inputs or settings require a new
+checkpoint directory.
+
+### Running
+
+The runners set the working directory to the configured repository so the
+bundled DNAm probe lists resolve correctly. They source `outcomewas/main.R`
+and `outcomewas/R/plotting_helpers.R`.
+
+```bash
+Rscript ~/FAST/GitHub/track-3.3/outcomewas/CALERIE/DNAm/INF_24mo/run_DNAm_INF_24mo.R
+Rscript ~/FAST/GitHub/track-3.3/outcomewas/CALERIE/DNAm/MetS_24mo/run_DNAm_Mets_24mo.R
+```
+
+Run one outcome at a time. Each is configured for 47 workers on the 48-vCPU
+host, with BLAS/OpenMP threads capped at one per process and checkpoint
+batches of 2,000 CpGs. Both analysis and reports enable `verbose = TRUE` and
+append timestamped progress to `run.log`.
+
+Reports remain serial. OutcomeWAS avoids the Track 1.1.1 per-CpG randomization
+tests and repeated row-binding, but still computes summaries for every CpG
+within each stratum, visit, and treatment arm. Progress logging does not change
+that computation, and the full DNAm report runtime has not been benchmarked here.
 
 ---
 
