@@ -313,6 +313,11 @@ raw beta matrix and DNAm covariate files as the Track 1.1.1 beta runner. See
 [CALERIE DNAm beta runs](INPUTS_OUTPUTS.md#calerie-dnam-beta-runs) for paths,
 outputs, and launch commands.
 
+For CALERIE, the INF/MetS outcome is fixed at 24 months and is modeled from
+both 12-month (`FU = 1`) and 24-month (`FU = 2`) methylation, with baseline
+adjustment. Archive the previous 24-month-only beta output directory before
+rerunning: its `FU1` checkpoints contain 24-month fits and cannot be reused.
+
 Omics data must be a data frame with:
 
 | Column | Type | Description |

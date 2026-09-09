@@ -586,20 +586,26 @@ Each outcome file must contain one row per subject. Its 24-month score is
 joined to that subject's methylation visits. An optional CSV row-index column
 is ignored by selecting the outcome columns by name.
 
-The existing 24-month-only analysis is retained: the runners keep `Time_Point`
-values `base` and `24` and encode them as `FU = 0` and `FU = 1`.
+The 24-month outcome is modeled from **every methylation follow-up**. Its
+measurement time does not restrict the predictor visits. The runners preserve
+the raw `fu` coding used by Track 1.1.1:
 
 | Methylation visit | These OutcomeWAS runners | Track 1.1.1 beta runner |
 |:---|:---|:---|
 | Baseline | `FU = 0` | `FU = 0` |
-| 12 months | Excluded | `FU = 1` |
-| 24 months | `FU = 1` | `FU = 2` |
+| 12 months | `FU = 1` | `FU = 1` |
+| 24 months | `FU = 2` | `FU = 2` |
 
-Before passing these results to `FAST_mediation()`, select the 24-month
-Track 1.1.1 treatment effects (`FU = 2`) and align the follow-up keys explicitly
-in a copy of the input results. A direct join on the current numeric `FU`
-values would incorrectly pair 24-month OutcomeWAS with 12-month treatment
-effects. The runners do not perform this downstream mapping.
+Both `analysis_change` and `analysis_level` therefore contain `FU = 1` and
+`FU = 2` against the same subject-level INF or MetS outcome. Baseline
+methylation is the adjustment in each model, not a separate `FU = 0` outcome
+effect. Each follow-up uses its own subjects with baseline and that follow-up;
+a subject does not need measurements at both follow-ups to contribute.
+
+Before model fitting, the runners require at least one baseline-paired subject
+at each intended follow-up and log the visit labels and paired-subject counts.
+Corrected results use the same `ANALYTE_NAME x FU` visit keys as the Track 1.1.1
+beta treatment results for mediation; no follow-up relabeling is needed.
 
 As in the 1.1.1 beta runner, the model uses genetic PCs `snppc1.x`–`snppc3.x`,
 `agebl`, `deidsite`, `bmistrat`, cell PCs `cell_PC1`–`cell_PC4`, and control
@@ -635,6 +641,14 @@ These paths are separate from legacy M-value runs and from the 1.1.1 results.
 Resume only an unchanged run; changed inputs or settings require a new
 checkpoint directory.
 
+**Migrating from the previous 24-month-only beta run:** archive/deprecate the
+entire previous outcome directory before launching these corrected runners.
+The configured output paths are unchanged, so the archived directory must no
+longer occupy the active path. Start with no old checkpoints: the previous
+beta run stored 24-month fits under `FU1`, while corrected `FU1` means
+12 months. Reusing those files would silently substitute 24-month fits for
+the intended 12-month analysis. Preserve the archived results separately.
+
 ### Running
 
 The runners set the working directory to the configured repository so the
@@ -662,6 +676,8 @@ that computation, and the full DNAm report runtime has not been benchmarked here
 
 - Invalid required columns or invalid field types stop the run.
 - Non-consecutive `FU` encoding stops the run.
+- CALERIE DNAm beta runners stop before model fitting if either the 12-month
+  or 24-month baseline-paired sample set is empty.
 - Non-constant within-subject outcome, sex, or treatment stops the run.
 - Time-to-event validation warns that `OUTCOME_TIME` is assumed to be measured
   in years.

@@ -133,18 +133,10 @@ outcome <- read_csv(outcome_path, col_names = TRUE, show_col_types = FALSE) |>
 
 stopifnot(!anyNA(outcome$SUBJECT_ID), !any(duplicated(outcome$SUBJECT_ID)))
 
-# Preserve the 24-month-only analysis: FU=1 here is FU=2 in Track 1.1.1.
-# Align visit keys explicitly before using these results for mediation.
+# The outcome is measured at 24 months; methylation is modeled at every FU.
+# Keep Track 1.1.1 visit coding: baseline=0, 12 months=1, 24 months=2.
 pheno <- pheno |>
-  filter(Time_Point %in% c("base", "24")) |>
-  inner_join(outcome, by = "SUBJECT_ID") |>
-  mutate(
-    FU = case_when(
-      Time_Point == "base" ~ 0,
-      Time_Point == "24" ~ 1
-    ),
-    FU = factor(FU, levels = c(0, 1))
-  )
+  inner_join(outcome, by = "SUBJECT_ID")
 
 # -----------------------------
 # Define covariates and retain matched, complete samples (as in Track 1.1.1)
@@ -170,6 +162,20 @@ pheno <- pheno |>
 stopifnot(nrow(pheno) > 0)
 stopifnot(!any(duplicated(pheno$SAMPLE_ID)))
 stopifnot(all(pheno$SAMPLE_ID %in% colnames(omics_raw)))
+
+# Require both intended follow-ups before starting the expensive analysis.
+# Each FU has its own baseline-paired subjects; a subject need not have both FUs.
+baseline_subjects <- pheno$SUBJECT_ID[pheno$FU == 0]
+followup_pair_counts <- vapply(1:2, function(fu) {
+  length(intersect(baseline_subjects, pheno$SUBJECT_ID[pheno$FU == fu]))
+}, integer(1))
+if (any(followup_pair_counts == 0L)) {
+  stop("Expected baseline-paired methylation at both 12 months (FU=1) and 24 months (FU=2).")
+}
+log_status(paste0(
+  "fixed outcome: 24mo; methylation FU1=12mo (", followup_pair_counts[1],
+  " paired subjects), FU2=24mo (", followup_pair_counts[2], " paired subjects)"
+))
 
 # -----------------------------
 # Build omics table
