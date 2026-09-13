@@ -212,6 +212,10 @@ reports <- FAST_outcome_WAS_reports(
 `verbose = TRUE` reports validation and summary-stage progress without changing
 the report calculations or return value.
 
+Reports run serially. Omics summaries use bounded numeric-matrix chunks and
+preallocated output vectors to avoid repeated data-frame row extraction and
+column copying; statistics, sample selection, and output ordering are unchanged.
+
 ### Return Value
 
 A list with three top-level elements:

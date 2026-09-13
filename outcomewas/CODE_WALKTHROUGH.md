@@ -158,8 +158,9 @@ What it does:
 3. Calls `.generate_reports()`.
 4. Returns QC summaries and outcome summaries.
 
-Reports and analysis are intentionally separate. Reports are cheap and
-descriptive; model fitting can be long-running, parallelized, and checkpointed.
+Reports and analysis are intentionally separate. Reports calculate descriptive
+statistics serially, using bounded numeric-matrix chunks and preallocated vectors
+for omics summaries. Model fitting can be parallelized and checkpointed.
 
 ---
 

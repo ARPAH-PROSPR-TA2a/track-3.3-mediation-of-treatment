@@ -33,29 +33,44 @@
   omics_numeric <- omics_df[, setdiff(names(omics_df), "ANALYTE_NAME"), drop = FALSE]
   omics_numeric <- omics_numeric[, colnames(omics_numeric) %in% sample_ids, drop = FALSE]
 
-  report <- data.frame(
-    ANALYTE_NAME = analyte_names,
-    N_NONMISSING = NA_integer_,
-    MEAN = NA_real_,
-    MEDIAN = NA_real_,
-    SD = NA_real_,
-    MIN = NA_real_,
-    MAX = NA_real_,
-    stringsAsFactors = FALSE
-  )
+  n_analytes <- length(analyte_names)
+  n_nonmissing <- integer(n_analytes)
+  means <- numeric(n_analytes)
+  medians <- numeric(n_analytes)
+  sds <- numeric(n_analytes)
+  minima <- numeric(n_analytes)
+  maxima <- numeric(n_analytes)
 
-  for (i in seq_along(analyte_names)) {
-    analyte_values <- as.numeric(omics_numeric[i, ])
+  # Bound matrix allocation and avoid copying full report columns per analyte.
+  chunk_size <- 2000L
+  for (chunk in seq_len(ceiling(n_analytes / chunk_size))) {
+    rows <- seq.int((chunk - 1L) * chunk_size + 1L,
+                    min(chunk * chunk_size, n_analytes))
+    omics_chunk <- as.matrix(omics_numeric[rows, , drop = FALSE])
 
-    report$N_NONMISSING[i] <- sum(!is.na(analyte_values))
-    report$MEAN[i] <- mean(analyte_values, na.rm = TRUE)
-    report$MEDIAN[i] <- median(analyte_values, na.rm = TRUE)
-    report$SD[i] <- sd(analyte_values, na.rm = TRUE)
-    report$MIN[i] <- min(analyte_values, na.rm = TRUE)
-    report$MAX[i] <- max(analyte_values, na.rm = TRUE)
+    for (j in seq_along(rows)) {
+      i <- rows[j]
+      analyte_values <- as.numeric(omics_chunk[j, ])
+
+      n_nonmissing[i] <- sum(!is.na(analyte_values))
+      means[i] <- mean(analyte_values, na.rm = TRUE)
+      medians[i] <- median(analyte_values, na.rm = TRUE)
+      sds[i] <- sd(analyte_values, na.rm = TRUE)
+      minima[i] <- min(analyte_values, na.rm = TRUE)
+      maxima[i] <- max(analyte_values, na.rm = TRUE)
+    }
   }
 
-  report
+  data.frame(
+    ANALYTE_NAME = analyte_names,
+    N_NONMISSING = n_nonmissing,
+    MEAN = means,
+    MEDIAN = medians,
+    SD = sds,
+    MIN = minima,
+    MAX = maxima,
+    stringsAsFactors = FALSE
+  )
 }
 
 

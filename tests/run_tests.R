@@ -3,6 +3,7 @@ test_scripts <- c(
   file.path("tests", "mediation", "test_comprehensive.R"),
   file.path("tests", "outcomewas", "test_protein_annotation.R"),
   file.path("tests", "outcomewas", "test_comprehensive.R"),
+  file.path("tests", "outcomewas", "test_reporting_summaries.R"),
   file.path("tests", "outcomewas", "test_dnam_betas.R"),
   file.path("tests", "outcomewas", "test_dnam_runner_followups.R"),
   file.path("tests", "outcomewas", "test_parallel_checkpoint.R"),
