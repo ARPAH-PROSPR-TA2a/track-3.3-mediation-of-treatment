@@ -2,8 +2,7 @@
 # Paths: edit these for your machine
 # -----------------------------
 repo <- "~/FAST/GitHub/track-3.3"
-treatment_path <- "~/FAST/Outputs/1.1.1/DNAm_betas_1.1.1.rds"
-# Alternative saved layout: ~/FAST/Outputs/1.1.1/DNAm_Bvals_1.1.1/DNAm_betas_1.1.1.rds
+treatment_path <- "~/FAST/Outputs/1.1.1/DNAm_Bvals_1.1.1/DNAm_betas_1.1.1.rds"
 outcome_path <- "~/FAST/Outputs/3.3/DNAm_betas_3.3OWAS_INF/DNAm_betas_3.3OWAS_INF_results.rds"
 out_dir <- "~/FAST/Outputs/3.3/DNAm_betas_3.3Med_INF"
 

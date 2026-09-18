@@ -17,14 +17,7 @@ and saves the results. `treatment_results`, `outcome_results`,
 
 ## Input paths
 
-The default treatment path matches the current Track 1.1.1 beta runner:
-
-```text
-~/FAST/Outputs/1.1.1/DNAm_betas_1.1.1.rds
-```
-
-If that file was moved into the reorganized output directory, set
-`treatment_path` to:
+The treatment path matches the confirmed production output directory:
 
 ```text
 ~/FAST/Outputs/1.1.1/DNAm_Bvals_1.1.1/DNAm_betas_1.1.1.rds
