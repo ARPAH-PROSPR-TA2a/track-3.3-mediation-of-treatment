@@ -1,13 +1,13 @@
-# CALERIE DNAm beta mediation of 24-month INF
+# CALERIE DNAm beta mediation of 24-month MetS
 
-`run_DNAm_INF_24mo.R` is a top-level R script, following the existing CALERIE
+`run_DNAm_MetS_24mo.R` is a top-level R script, following the existing CALERIE
 runners. Edit its four paths (`repo`, `treatment_path`, `outcome_path`, `out_dir`)
 and source it, or run it section by section. It sets the working directory to
 the local GitHub checkout and sources `mediation/main.R` from that checkout.
 
 ```r
 # From the runner's folder, after editing the paths:
-source("run_DNAm_INF_24mo.R")
+source("run_DNAm_MetS_24mo.R")
 ```
 
 The script visibly loads the two RDS files, releases their unused coefficient
@@ -26,12 +26,12 @@ The treatment path matches the confirmed production output directory:
 The outcome input is:
 
 ```text
-~/FAST/Outputs/3.3/DNAm_betas_3.3OWAS_INF/DNAm_betas_3.3OWAS_INF_results.rds
+~/FAST/Outputs/3.3/DNAm_betas_3.3OWAS_MetS/DNAm_betas_3.3OWAS_MetS_results.rds
 ```
 
 Both paths must use DNAm beta values and compatible treatment coding and
-covariates. FU1 is 12-month DNAm and FU2 is 24-month DNAm; INF is fixed at
-24 months. The INF analysis requires observed outcome, so its participants can
+covariates. FU1 is 12-month DNAm and FU2 is 24-month DNAm; MetS is fixed at
+24 months. The MetS analysis requires observed outcome, so its participants can
 differ from those in the treatment analysis. Effect summaries alone cannot
 verify participant overlap or measurement scale.
 
@@ -44,9 +44,9 @@ within each analysis/stratum/FU and within the filtered probes.
 
 ## Outputs and resources
 
-Default output folder: `~/FAST/Outputs/3.3/DNAm_betas_3.3Med_INF/`.
+Default output folder: `~/FAST/Outputs/3.3/DNAm_betas_3.3Med_MetS/`.
 
-- `DNAm_betas_3.3Med_INF_results.rds`: nested indirect effects and join diagnostics.
+- `DNAm_betas_3.3Med_MetS_results.rds`: nested indirect effects and join diagnostics.
 - `summary.tsv`: tested/filtered counts and significance counts for all 12
   analysis/stratum/FU combinations.
 - `provenance.rds`: input and repository paths, timing, FU definitions, method,
@@ -59,7 +59,7 @@ Progress and the summary print to both the R console and `run.log`. Core
 mediation errors are logged; errors elsewhere are shown by R on the console,
 with the last log entry identifying the stage. Existing outputs require a new
 `out_dir` to avoid overwriting them. The script is tracked under
-`mediation/CALERIE/DNAm/INF_24mo/` in the GitHub repository.
+`mediation/CALERIE/DNAm/MetS_24mo/` in the GitHub repository.
 
 Use one R process: approximately 2 vCPUs and 32 GiB RAM, with 64 GiB for additional
 headroom. The full RDS files must each fit in memory while loading; unused

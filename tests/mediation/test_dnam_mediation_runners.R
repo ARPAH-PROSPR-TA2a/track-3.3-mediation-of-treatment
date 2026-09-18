@@ -1,23 +1,49 @@
 source(file.path("mediation", "main.R"))
 
 
-run_tests <- function() {
+run_runner_tests <- function(outcome_name) {
   repo_root <- normalizePath(getwd(), mustWork = TRUE)
+  runner_name <- paste0("run_DNAm_", outcome_name, "_24mo.R")
   runner <- file.path(
-    repo_root, "mediation", "CALERIE", "DNAm", "INF_24mo", "run_DNAm_INF_24mo.R"
+    repo_root, "mediation", "CALERIE", "DNAm", paste0(outcome_name, "_24mo"), runner_name
   )
-  if (!file.exists(runner)) stop("DNAm INF mediation runner not found: ", runner)
+  if (!file.exists(runner)) stop("DNAm ", outcome_name, " mediation runner not found: ", runner)
 
-  temp_root <- tempfile("dnam-inf-mediation-")
+  temp_root <- tempfile(paste0("dnam-", tolower(outcome_name), "-mediation-"))
   dir.create(temp_root)
   on.exit(unlink(temp_root, recursive = TRUE), add = TRUE)
   analyses <- c("analysis_change", "analysis_level")
   strata <- c("all", "male", "female")
-  result_name <- "DNAm_betas_3.3Med_INF_results.rds"
+  result_name <- paste0("DNAm_betas_3.3Med_", outcome_name, "_results.rds")
 
   expect_true <- function(value, label) {
     if (!isTRUE(value)) stop("FAIL: ", label)
     cat("PASS ", label, "\n", sep = "")
+  }
+
+  # Check production defaults before fixture paths replace the editable values.
+  runner_code <- parse(runner, keep.source = FALSE)
+  assignment_index <- function(name) {
+    index <- which(vapply(runner_code, function(expression) {
+      is.call(expression) && identical(expression[[1]], as.name("<-")) &&
+        identical(expression[[2]], as.name(name))
+    }, logical(1)))
+    if (length(index) != 1L) stop("Expected one editable assignment for ", name)
+    index
+  }
+  default_paths <- list(
+    repo = "~/FAST/GitHub/track-3.3",
+    treatment_path = "~/FAST/Outputs/1.1.1/DNAm_Bvals_1.1.1/DNAm_betas_1.1.1.rds",
+    outcome_path = paste0("~/FAST/Outputs/3.3/DNAm_betas_3.3OWAS_", outcome_name,
+                          "/DNAm_betas_3.3OWAS_", outcome_name, "_results.rds"),
+    out_dir = paste0("~/FAST/Outputs/3.3/DNAm_betas_3.3Med_", outcome_name)
+  )
+  cat("DNAm beta / 24-month ", outcome_name, " mediation runner tests\n\n", sep = "")
+  for (name in names(default_paths)) {
+    expect_true(
+      identical(runner_code[[assignment_index(name)]][[3]], default_paths[[name]]),
+      paste("Default", name, "matches the server layout for", outcome_name)
+    )
   }
 
   alpha <- data.frame(
@@ -87,21 +113,16 @@ run_tests <- function() {
       repo = repo_root, treatment_path = treatment_path,
       outcome_path = outcome_path, out_dir = output_dir
     )
-    code <- parse(runner, keep.source = FALSE)
+    code <- runner_code
     for (name in names(fixture_paths)) {
-      index <- which(vapply(code, function(expression) {
-        is.call(expression) && identical(expression[[1]], as.name("<-")) &&
-          identical(expression[[2]], as.name(name))
-      }, logical(1)))
-      if (length(index) != 1L) stop("Expected one editable assignment for ", name)
-      code[[index]][[3]] <- fixture_paths[[name]]
+      code[[assignment_index(name)]][[3]] <- fixture_paths[[name]]
     }
-    fixture_runner <- file.path(case_dir, "run_DNAm_INF_24mo.R")
+    fixture_runner <- file.path(case_dir, runner_name)
     writeLines(unlist(lapply(code, deparse)), fixture_runner)
     workspace_path <- file.path(case_dir, "workspace.rds")
     expression <- bquote({
       setwd(.(case_dir))
-      source("run_DNAm_INF_24mo.R")
+      source(.(runner_name))
       stopifnot(identical(getwd(), .(repo_root)))
       saveRDS(mget(c("treatment_results", "outcome_results", "mediation_results",
                      "mediation_summary"), envir = .GlobalEnv), .(workspace_path))
@@ -124,7 +145,6 @@ run_tests <- function() {
          workspace = workspace_path)
   }
 
-  cat("DNAm beta / 24-month INF mediation runner tests\n\n")
   successful <- launch("success")
   if (successful$status != 0L) {
     stop("FAIL: valid runner invocation\n", paste(successful$output, collapse = "\n"))
@@ -135,6 +155,14 @@ run_tests <- function() {
     "Runner saves results, summary, provenance, and run.log"
   )
   log <- readLines(file.path(successful$directory, "run.log"))
+  other_outcome <- if (outcome_name == "INF") "MetS" else "INF"
+  expect_true(
+    any(grepl(paste0("START DNAm beta / ", outcome_name, " mediation"), log, fixed = TRUE)) &&
+      any(grepl(paste0("fixed 24mo ", outcome_name, " outcome"), log, fixed = TRUE)) &&
+      !any(grepl(paste0("START DNAm beta / ", other_outcome, " mediation"), log, fixed = TRUE)) &&
+      !any(grepl(paste0("fixed 24mo ", other_outcome, " outcome"), log, fixed = TRUE)),
+    paste("Run log correctly identifies", outcome_name, "as the 24-month outcome")
+  )
   expect_true(
     all(vapply(file.path(dirname(successful$directory), c("treatment.rds", "outcome.rds")),
                function(path) any(grepl(path, log, fixed = TRUE)), logical(1))),
@@ -316,7 +344,7 @@ run_tests <- function() {
 
   expect_rejection("pre-existing-result", preexisting = TRUE)
   cat("PASS Existing results and every input RDS remain byte-identical\n")
-  cat("\nAll DNAm INF mediation runner tests passed.\n")
+  cat("\nAll DNAm ", outcome_name, " mediation runner tests passed.\n", sep = "")
 }
 
-run_tests()
+for (outcome_name in c("INF", "MetS")) run_runner_tests(outcome_name)

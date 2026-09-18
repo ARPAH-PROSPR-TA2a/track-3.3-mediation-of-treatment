@@ -35,3 +35,5 @@ Documentation:
 - [Examples/README.md](Examples/README.md): reproducible paired example.
 - [CALERIE DNAm beta / INF runner](CALERIE/DNAm/INF_24mo/README.md): production
   input paths, preflight checks, resource guidance, launch command and outputs.
+- [CALERIE DNAm beta / MetS runner](CALERIE/DNAm/MetS_24mo/README.md): the same
+  workflow for the 24-month MetS outcome, with separate outputs and logs.
