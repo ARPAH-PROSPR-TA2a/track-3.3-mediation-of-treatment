@@ -1,6 +1,7 @@
 test_scripts <- c(
   file.path("tests", "mediation", "test_input_generation.R"),
   file.path("tests", "mediation", "test_comprehensive.R"),
+  file.path("tests", "mediation", "test_dnam_inf_runner.R"),
   file.path("tests", "outcomewas", "test_protein_annotation.R"),
   file.path("tests", "outcomewas", "test_comprehensive.R"),
   file.path("tests", "outcomewas", "test_reporting_summaries.R"),

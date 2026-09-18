@@ -33,3 +33,5 @@ Documentation:
 - [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md): implementation flow, calculations,
   validation, and output structure.
 - [Examples/README.md](Examples/README.md): reproducible paired example.
+- [CALERIE DNAm beta / INF runner](CALERIE/DNAm/INF_24mo/README.md): production
+  input paths, preflight checks, resource guidance, launch command and outputs.
