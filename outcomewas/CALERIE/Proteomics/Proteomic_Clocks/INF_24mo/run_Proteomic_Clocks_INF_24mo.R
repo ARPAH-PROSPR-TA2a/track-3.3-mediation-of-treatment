@@ -8,19 +8,21 @@ library(tidyr)
 # -----------------------------
 # Explicit paths and parameters
 # -----------------------------
-omics_raw_path <- path.expand("~/CALERIE/Proteomics_Clock/data/omics_Proteomics_Clock.csv")
-pheno_raw_path <- path.expand("~/CALERIE/Proteomics_Clock/data/CALERIE_clinical_w_omics_crosswalks.csv")
+omics_raw_path <- path.expand("~/CALERIE/Proteomic_Clock/data/omics_Proteomic_Clock.csv")
+pheno_raw_path <- path.expand("~/CALERIE/Proteomic_Clock/data/CALERIE_clinical_w_omics_crosswalks.csv")
 genetic_pcs_path <- path.expand("~/CALERIE/data/Proteomics/CALERIE_GeneticPCs_20200727.xlsx")
 outcome_path <- path.expand("~/CALERIE/Proteomics/3.3/data/INF_CALERIE_24mo_Outcome.csv")
 
-pipeline_repo <- path.expand("~/CALERIE/repos/3.3/track-3.3-mediation-of-treatment")
-out_dir <- path.expand("~/CALERIE/Proteomic_Clock/3.3/INF_24mo")
+pipeline_repo <- path.expand("~/FAST/GitHub/track-3.3")
+# Keep all-visit results and checkpoints separate from the old 24-month-only run.
+out_dir <- path.expand("~/CALERIE/Proteomic_Clock/3.3/INF_24mo_allFU_v1")
 
-omics_type <- "Proteomics"
+omics_type <- "other"
 n_cores <- 3
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 log_file <- file.path(out_dir, "run.log")
+options(track33.progress_log = log_file)
 
 # -----------------------------
 # Read raw inputs
@@ -45,9 +47,10 @@ outcome <- read_csv(outcome_path, col_names = TRUE, show_col_types = FALSE) |>
   select(-1) |>
   rename(SUBJECT_ID = DEID, OUTCOME = INF_Score)
 
+stopifnot(all(c("Organ", "proteomics_barcode", "Adjusted_Predicted_Age") %in% names(omics_raw)))
 stopifnot(!any(is.na(omics_raw)))
 stopifnot(!any(duplicated(colnames(omics_raw))))
-stopifnot(!any(duplicated(omics_raw$SampleId)))
+stopifnot(!any(duplicated(omics_raw[, c("Organ", "proteomics_barcode")])))
 
 # -----------------------------
 # Create pheno
@@ -82,14 +85,18 @@ pheno <- pheno_raw |>
     deidsite = as_factor(deidsite),
     bmistrat = as_factor(bmistrat)
   ) |>
-  filter(FU %in% c(0, 24)) |>
+  filter(FU %in% c(0, 3, 6, 12, 24)) |>
   inner_join(outcome, by = "SUBJECT_ID") |>
   mutate(
+    # Same visit codes as the Track 1.1.1 proteomic-clock treatment results.
     FU = case_when(
       FU == 0 ~ 0,
-      FU == 24 ~ 1
+      FU == 3 ~ 1,
+      FU == 6 ~ 2,
+      FU == 12 ~ 3,
+      FU == 24 ~ 4
     ),
-    FU = factor(FU, levels = c(0, 1))
+    FU = factor(FU, levels = c(0, 1, 2, 3, 4))
   )
 
 # -----------------------------
@@ -99,8 +106,8 @@ shared_sample <- intersect(omics_raw$proteomics_barcode, pheno$SAMPLE_ID)
 stopifnot(length(shared_sample) > 0)
 
 pheno <- pheno |>
-  filter(SAMPLE_ID %in% shared_sample) |>
-  arrange(match(SAMPLE_ID, omics_raw$SampleId))
+  filter(SAMPLE_ID %in% shared_sample)
+stopifnot(!any(duplicated(pheno$SAMPLE_ID)))
 
 omics <- omics_raw |>
   filter(proteomics_barcode %in% shared_sample) |>
@@ -110,6 +117,8 @@ omics <- omics_raw |>
     values_from = Adjusted_Predicted_Age
   ) |>
   rename(ANALYTE_NAME = Organ)
+
+omics <- omics |> select(ANALYTE_NAME, all_of(pheno$SAMPLE_ID))
 
 # -----------------------------
 # Define covariates and validate input
@@ -126,7 +135,7 @@ stopifnot(identical(colnames(omics)[-1], pheno$SAMPLE_ID))
 # -----------------------------
 # Load pipeline functions
 # -----------------------------
-source(file.path(pipeline_repo, "main.R"), chdir = TRUE)
+source(file.path(pipeline_repo, "outcomewas", "main.R"), chdir = TRUE)
 
 stopifnot(
   exists("FAST_outcome_WAS"),
@@ -139,8 +148,10 @@ stopifnot(
 # -----------------------------
 # Analysis
 # -----------------------------
-cat("START Proteomics run: ", as.character(Sys.time()), "\n",
+cat("START proteomic-clock run: ", as.character(Sys.time()), "\n",
     file = log_file, append = TRUE, sep = "")
+cat("FU1=3mo, FU2=6mo, FU3=12mo, FU4=24mo; fixed 24-month INF outcome\n",
+    file = log_file, append = TRUE)
 
 results <- FAST_outcome_WAS(
   pheno = pheno,
@@ -148,7 +159,8 @@ results <- FAST_outcome_WAS(
   omics_type = omics_type,
   additional_covariates = covariates,
   n_cores = n_cores,
-  checkpoint_dir = file.path(out_dir, "checkpoints")
+  checkpoint_dir = file.path(out_dir, "checkpoints"),
+  verbose = TRUE
 )
 
 saveRDS(
@@ -183,7 +195,7 @@ cat("DONE reports: ", as.character(Sys.time()), "\n",
 # -----------------------------
 # Plotting
 # -----------------------------
-source(file.path(pipeline_repo, "plotting_helpers.R"), chdir = TRUE)
+source(file.path(pipeline_repo, "outcomewas", "R", "plotting_helpers.R"), chdir = TRUE)
 
 fig_change <- file.path(out_dir, "Figures", "change")
 fig_level <- file.path(out_dir, "Figures", "level")
@@ -202,4 +214,3 @@ generate_all_plots(
   figures_dir = fig_level,
   analysis = "analysis_level"
 )
-

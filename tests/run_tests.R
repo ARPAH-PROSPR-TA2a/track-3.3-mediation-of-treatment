@@ -11,6 +11,7 @@ test_scripts <- c(
   file.path("tests", "outcomewas", "test_reporting_summaries.R"),
   file.path("tests", "outcomewas", "test_dnam_betas.R"),
   file.path("tests", "outcomewas", "test_dnam_runner_followups.R"),
+  file.path("tests", "outcomewas", "test_proteomic_clock_runners.R"),
   file.path("tests", "outcomewas", "test_parallel_checkpoint.R"),
   file.path("tests", "outcomewas", "test_verbose_progress.R")
 )
