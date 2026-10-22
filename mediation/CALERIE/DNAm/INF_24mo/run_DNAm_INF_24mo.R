@@ -84,20 +84,26 @@ for (analysis in analyses) {
     for (role in names(effect_tables)) {
       effects <- effect_tables[[role]]
       if (!is.data.frame(effects) ||
-          !all(c("FU", "BH_P_VALUE_FILTERED") %in% names(effects))) {
-        stop(analysis, "/", stratum, " must contain both effect tables with FU and BH_P_VALUE_FILTERED.")
+          !"FU" %in% names(effects) ||
+          !any(c("IN_FILTERED_SET", "BH_P_VALUE_FILTERED") %in% names(effects))) {
+        stop(analysis, "/", stratum, " must contain both effect tables with FU and IN_FILTERED_SET or legacy BH_P_VALUE_FILTERED.")
       }
       fu <- suppressWarnings(as.numeric(as.character(effects$FU)))
       if (anyNA(fu) || !setequal(fu, c(1, 2))) {
         stop(analysis, "/", stratum, " must contain exactly FU1=12mo and FU2=24mo.")
       }
+      filtered <- if ("IN_FILTERED_SET" %in% names(effects)) {
+        effects$IN_FILTERED_SET %in% TRUE
+      } else {
+        !is.na(effects$BH_P_VALUE_FILTERED)
+      }
       for (visit in 1:2) {
-        if (!any(fu == visit & !is.na(effects$BH_P_VALUE_FILTERED))) {
+        if (!any(fu == visit & filtered)) {
           stop("No filtered probes for ", analysis, "/", stratum, "/FU", visit, ".")
         }
         log_status(sprintf("preflight %s/%s/%s/FU%d: %d rows; %d filtered",
                            role, analysis, stratum, visit, sum(fu == visit),
-                           sum(fu == visit & !is.na(effects$BH_P_VALUE_FILTERED))))
+                           sum(fu == visit & filtered)))
       }
     }
   }
@@ -105,10 +111,10 @@ for (analysis in analyses) {
 rm(effects, effect_tables)
 
 # -----------------------------
-# Mediation: alpha x beta, Sobel inference, BH within each FU/stratum/analysis
+# Mediation: alpha x beta, Sobel inference, BH within each contrast/FU/stratum/analysis
 # -----------------------------
 mediation_started <- Sys.time()
-log_status("Calculating indirect effects: product of coefficients, Sobel inference, within-FU BH")
+log_status("Calculating indirect effects: product of coefficients, Sobel inference, within-FU/contrast BH")
 # The core validates keys, estimates, SEs and filtered membership. Treat its
 # partial-join/stratum warnings as errors so omitted results get reviewed.
 mediation_results <- withCallingHandlers(
@@ -137,19 +143,25 @@ for (analysis in analyses) {
                        join$treatment_only_rows, join$outcome_only_rows))
     numeric_columns <- c("INDIRECT_EFFECT", "INDIRECT_SE", "Z_VALUE", "P_VALUE",
                          "CI_LOWER", "CI_UPPER", "BH_P_VALUE")
-    if (any(vapply(effects[numeric_columns], function(x) any(!is.finite(x)), logical(1)))) {
+    ok <- effects$STATUS == "ok"
+    if (any(vapply(effects[ok, numeric_columns, drop = FALSE], function(x) any(!is.finite(x)), logical(1)))) {
       stop("Non-finite mediation output for ", analysis, "/", stratum, ".")
     }
     for (fu in 1:2) {
-      x <- effects[effects$FU == fu, , drop = FALSE]
-      summary_rows[[length(summary_rows) + 1L]] <- data.frame(
-        ANALYSIS = analysis, STRATUM = stratum, FU = fu,
-        METHYLATION_MONTH = 12L * fu, OUTCOME_MONTH = 24L,
-        N_TESTED = nrow(x), N_FILTERED = sum(!is.na(x$BH_P_VALUE_FILTERED)),
-        P_LT_0_05 = sum(x$P_VALUE < 0.05),
-        BH_LT_0_05 = sum(x$BH_P_VALUE < 0.05),
-        FILTERED_BH_LT_0_05 = sum(x$BH_P_VALUE_FILTERED < 0.05, na.rm = TRUE)
-      )
+      for (contrast in unique(effects$CONTRAST[effects$FU == fu])) {
+        x <- effects[effects$FU == fu & effects$CONTRAST == contrast, , drop = FALSE]
+        summary_rows[[length(summary_rows) + 1L]] <- data.frame(
+          ANALYSIS = analysis, STRATUM = stratum, FU = fu,
+          CONTRAST = contrast, TREATMENT = x$TREATMENT[1L], REFERENCE = x$REFERENCE[1L],
+          METHYLATION_MONTH = 12L * fu, OUTCOME_MONTH = 24L,
+          N_REQUESTED = nrow(x), N_TESTED = sum(x$STATUS == "ok"),
+          N_UNAVAILABLE = sum(x$STATUS != "ok"),
+          N_FILTERED = sum(x$IN_FILTERED_SET),
+          P_LT_0_05 = sum(x$P_VALUE < 0.05, na.rm = TRUE),
+          BH_LT_0_05 = sum(x$BH_P_VALUE < 0.05, na.rm = TRUE),
+          FILTERED_BH_LT_0_05 = sum(x$BH_P_VALUE_FILTERED < 0.05, na.rm = TRUE)
+        )
+      }
     }
   }
 }
@@ -170,6 +182,9 @@ saveRDS(
        started = started, finished = Sys.time(),
        methylation_months = c(`1` = 12L, `2` = 24L), outcome_month = 24L,
        method = "product_of_coefficients", inference = "sobel",
+       treatment_metadata = treatment_results$metadata,
+       outcome_metadata = outcome_results$metadata,
+       mediation_metadata = attributes(mediation_results)[setdiff(names(attributes(mediation_results)), "names")],
        session_info = sessionInfo()),
   file.path(out_dir, "provenance.rds")
 )

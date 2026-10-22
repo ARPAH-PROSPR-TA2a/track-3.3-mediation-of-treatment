@@ -20,29 +20,70 @@ library(ggplot2)
 }
 
 
+.outcome_filtered_membership <- function(outcome_effects) {
+  if ("IN_FILTERED_SET" %in% names(outcome_effects)) {
+    return(outcome_effects$IN_FILTERED_SET %in% TRUE)
+  }
+  # Older results encoded membership only through available filtered inference.
+  if ("BH_P_VALUE_FILTERED" %in% names(outcome_effects)) {
+    p <- outcome_effects$BH_P_VALUE_FILTERED
+    return(is.finite(p) & p >= 0 & p <= 1)
+  }
+  rep(FALSE, nrow(outcome_effects))
+}
+
+
+.outcome_plot_rows <- function(results, stratum, fu, probe_set) {
+  oe <- results[[stratum]]$outcome_effects
+  if (is.null(oe)) stop(paste0("No results for stratum '", stratum, "'"))
+  if ("ARM" %in% names(oe)) {
+    stop("Outcome plots require one common analyte slope per ANALYTE_NAME x FU; ARM tables are not supported.")
+  }
+  oe <- oe[oe$FU == fu, , drop = FALSE]
+  if (nrow(oe) == 0L) stop(paste0("No results for FU=", fu))
+  if (probe_set == "filtered") {
+    oe <- oe[.outcome_filtered_membership(oe), , drop = FALSE]
+  }
+  oe
+}
+
+
+.outcome_plot_estimable <- function(oe) {
+  keep <- is.finite(oe$P_VALUE) & oe$P_VALUE >= 0 & oe$P_VALUE <= 1 &
+    is.finite(oe$EFFECT_SIZE)
+  if ("STATUS" %in% names(oe)) keep <- keep & oe$STATUS %in% "ok"
+  keep
+}
+
+
+.outcome_empty_plot_label <- function(oe, probe_set) {
+  if (nrow(oe) == 0L && probe_set == "filtered") {
+    "No probes in filtered set"
+  } else {
+    "No estimable results"
+  }
+}
+
+
 plot_qq <- function(results, stratum = "all", fu = 1, probe_set = "full",
                     analysis = c("analysis_change", "analysis_level"), title = NULL) {
 
   results <- .coerce_to_strata_results(results, analysis = match.arg(analysis))
-
-  oe <- results[[stratum]]$outcome_effects
-  if (is.null(oe)) stop(paste0("No results for stratum '", stratum, "'"))
-
-  oe <- oe[oe$FU == fu, ]
-  if (nrow(oe) == 0) stop(paste0("No results for FU=", fu))
-
-  if (probe_set == "filtered") {
-    oe <- oe[!is.na(oe$BH_P_VALUE_FILTERED), ]
-    if (nrow(oe) == 0) stop("No filtered probes found")
-  }
-
-  pvals <- oe$P_VALUE[!is.na(oe$P_VALUE)]
+  probe_set <- match.arg(probe_set, c("full", "filtered"))
+  oe <- .outcome_plot_rows(results, stratum, fu, probe_set)
+  pvals <- oe$P_VALUE[.outcome_plot_estimable(oe)]
 
   if (is.null(title)) {
     title <- paste0("QQ Plot - ", stratum, ", FU=", fu, ", ", probe_set)
   }
 
-  qq(pvals, main = title)
+  if (!length(pvals)) {
+    plot.new()
+    title(main = title)
+    text(0.5, 0.5, .outcome_empty_plot_label(oe, probe_set))
+    return(invisible(NULL))
+  }
+  qq(pmax(pvals, .Machine$double.xmin), main = title)
 }
 
 
@@ -52,21 +93,23 @@ plot_volcano <- function(results, stratum = "all", fu = 1, probe_set = "full",
                          title = NULL) {
 
   results <- .coerce_to_strata_results(results, analysis = match.arg(analysis))
-
-  oe <- results[[stratum]]$outcome_effects
-  if (is.null(oe)) stop(paste0("No results for stratum '", stratum, "'"))
-  oe <- oe[oe$FU == fu, ]
-  if (nrow(oe) == 0) stop(paste0("No results for FU=", fu))
-
-  if (probe_set == "filtered") {
-    oe <- oe[!is.na(oe$BH_P_VALUE_FILTERED), ]
-    if (nrow(oe) == 0) stop("No filtered probes found")
+  probe_set <- match.arg(probe_set, c("full", "filtered"))
+  oe <- .outcome_plot_rows(results, stratum, fu, probe_set)
+  if (is.null(title)) {
+    title <- paste0("Volcano Plot - ", stratum, ", FU=", fu, ", ", probe_set)
   }
+  keep <- .outcome_plot_estimable(oe)
+  if (!any(keep)) {
+    return(ggplot() +
+      annotate("text", x = 0, y = 0, label = .outcome_empty_plot_label(oe, probe_set)) +
+      labs(title = title) + theme_void())
+  }
+  oe <- oe[keep, , drop = FALSE]
 
   bh_col <- if (probe_set == "filtered") "BH_P_VALUE_FILTERED" else "BH_P_VALUE"
   sig <- !is.na(oe[[bh_col]]) & oe[[bh_col]] < p_threshold
 
-  oe$neg_log_p <- -log10(oe$P_VALUE)
+  oe$neg_log_p <- -log10(pmax(oe$P_VALUE, .Machine$double.xmin))
   oe$direction <- ifelse(!sig, "Not significant",
                          ifelse(oe$EFFECT_SIZE > 0, "Up", "Down"))
 
@@ -77,10 +120,6 @@ plot_volcano <- function(results, stratum = "all", fu = 1, probe_set = "full",
     phantom <- oe[NA, ]
     phantom$direction <- factor(lvl, levels = all_levels)
     oe <- rbind(oe, phantom)
-  }
-
-  if (is.null(title)) {
-    title <- paste0("Volcano Plot - ", stratum, ", FU=", fu, ", ", probe_set)
   }
 
   ggplot(oe, aes(x = EFFECT_SIZE, y = neg_log_p, color = direction)) +
@@ -111,11 +150,20 @@ generate_all_plots <- function(results, figures_dir = NULL,
     dir.create(figures_dir, recursive = TRUE)
   }
 
-  strata <- c("all", "male", "female")[!sapply(results[c("all", "male", "female")], is.null)]
-  fu_levels <- sort(unique(results[[strata[1]]]$outcome_effects$FU))
-
-  has_filtered <- "BH_P_VALUE_FILTERED" %in% colnames(results[[strata[1]]]$outcome_effects) &&
-    any(!is.na(results[[strata[1]]]$outcome_effects$BH_P_VALUE_FILTERED))
+  strata <- c("all", "male", "female")[vapply(results[c("all", "male", "female")],
+    function(x) !is.null(x$outcome_effects) && nrow(x$outcome_effects) > 0L, logical(1))]
+  if (!length(strata)) {
+    message("No outcome-effect rows to plot.")
+    return(invisible(NULL))
+  }
+  fu_by_stratum <- setNames(lapply(strata, function(s) {
+    sort(unique(results[[s]]$outcome_effects$FU))
+  }), strata)
+  fu_levels <- sort(unique(unlist(fu_by_stratum, use.names = FALSE)))
+  has_filtered <- any(vapply(strata, function(s) {
+    oe <- results[[s]]$outcome_effects
+    "IN_FILTERED_SET" %in% names(oe) || any(.outcome_filtered_membership(oe))
+  }, logical(1)))
   probe_sets <- if (has_filtered) c("full", "filtered") else c("full")
 
   cat("Generating plots:\n")
@@ -123,25 +171,31 @@ generate_all_plots <- function(results, figures_dir = NULL,
   cat("  FU levels:  ", paste(fu_levels, collapse = ", "), "\n")
   cat("  Probe sets: ", paste(probe_sets, collapse = ", "), "\n")
 
+  save_plot_pdf <- function(path, width, height, draw) {
+    pdf(path, width = width, height = height)
+    on.exit(dev.off(), add = TRUE)
+    draw()
+  }
+
   for (ps in probe_sets) {
     qq_file <- file.path(figures_dir, paste0("qq_", ps, ".pdf"))
-    pdf(qq_file, width = 7, height = 6)
-    for (s in strata) {
-      for (fu in fu_levels) {
-        plot_qq(results, stratum = s, fu = fu, probe_set = ps)
+    save_plot_pdf(qq_file, 7, 6, function() {
+      for (s in strata) {
+        for (fu in fu_by_stratum[[s]]) {
+          plot_qq(results, stratum = s, fu = fu, probe_set = ps)
+        }
       }
-    }
-    dev.off()
+    })
     cat("  Saved:", qq_file, "\n")
 
     volcano_file <- file.path(figures_dir, paste0("volcano_", ps, ".pdf"))
-    pdf(volcano_file, width = 8, height = 6)
-    for (s in strata) {
-      for (fu in fu_levels) {
-        print(plot_volcano(results, stratum = s, fu = fu, probe_set = ps))
+    save_plot_pdf(volcano_file, 8, 6, function() {
+      for (s in strata) {
+        for (fu in fu_by_stratum[[s]]) {
+          print(plot_volcano(results, stratum = s, fu = fu, probe_set = ps))
+        }
       }
-    }
-    dev.off()
+    })
     cat("  Saved:", volcano_file, "\n")
   }
 

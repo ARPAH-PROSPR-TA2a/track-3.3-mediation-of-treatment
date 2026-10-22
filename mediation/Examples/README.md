@@ -35,3 +35,25 @@ The committed input result objects let the final mediation example run without
 the Track 1.1.1 checkout. The live input-generation test regenerates them in a
 temporary directory and checks current upstream compatibility when that
 checkout is available.
+
+## Synthetic multi-arm example
+
+The standalone example creates three treatment arms, fits joint alpha models,
+then runs the common-beta OutcomeWAS model and passes its results into
+mediation:
+
+```bash
+Rscript mediation/Examples/run_multiarm_example.R /tmp/fast_multiarm_mediation
+```
+
+The optional argument selects an output directory; without it the script uses
+R's temporary directory. All data are simulated, and the script needs no
+Track 1.1.1 checkout or production data. Its alpha fit demonstrates the same
+joint active-versus-control contract rather than splitting the study into
+separate two-group fits.
+
+Inspect the preserved treatment contrasts and labels, the common beta reused
+for each analyte's indirect effects, and the saved provenance. The products
+`alpha_1 * beta` and `alpha_3 * beta` differ because the interventions have
+different alpha effects. No treatment interactions or model-selection option
+are needed; the outcome model is the same as in the binary example.

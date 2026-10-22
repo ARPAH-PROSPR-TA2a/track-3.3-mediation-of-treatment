@@ -16,7 +16,11 @@
 .apply_multiple_testing_correction <- function(results_df, p_value_col = "P_VALUE",
                                                group_col = "COEFFICIENT") {
 
-  if (is.null(results_df) || nrow(results_df) == 0) {
+  if (is.null(results_df)) {
+    return(results_df)
+  }
+  if (nrow(results_df) == 0) {
+    results_df$BH_P_VALUE <- numeric(0)
     return(results_df)
   }
 
@@ -92,6 +96,74 @@
 }
 
 
+# Unavailable fits retain the requested beta row; coefficient tables describe
+# actual fitted terms only, so a fit error has a typed, empty coefficient table.
+.empty_outcome_result <- function(analyte_names, fu_level, outcome_type,
+                                  status = "not_estimable") {
+  coefficients <- data.frame(
+    ANALYTE_NAME = character(), FU = integer(), COEFFICIENT = character(),
+    N_OBS = integer(), EFFECT_SIZE = numeric(), SE = numeric(), P_VALUE = numeric()
+  )
+  outcome_effects <- data.frame(
+    ANALYTE_NAME = analyte_names, FU = rep.int(fu_level, length(analyte_names)),
+    EFFECT_SIZE = rep(NA_real_, length(analyte_names)),
+    SE = rep(NA_real_, length(analyte_names)),
+    P_VALUE = rep(NA_real_, length(analyte_names)),
+    stringsAsFactors = FALSE
+  )
+  if (outcome_type == "tte") {
+    coefficients$N_EVENTS <- integer()
+    coefficients$HAZARD_RATIO <- numeric()
+    outcome_effects$HAZARD_RATIO <- rep(NA_real_, nrow(outcome_effects))
+  }
+  outcome_effects$STATUS <- rep.int(status, nrow(outcome_effects))
+  list(coefficients = coefficients, outcome_effects = outcome_effects)
+}
+
+
+.extract_outcome_effect <- function(coefficients, analyte_name, fu_level, outcome_type) {
+  out <- .empty_outcome_result(analyte_name, fu_level, outcome_type)$outcome_effects
+  row <- coefficients[coefficients$COEFFICIENT == "analyte", , drop = FALSE]
+  if (nrow(row) == 1L && is.finite(row$EFFECT_SIZE) &&
+      is.finite(row$SE) && row$SE > 0 && is.finite(row$P_VALUE)) {
+    columns <- c("EFFECT_SIZE", "SE", "P_VALUE")
+    if (outcome_type == "tte") columns <- c(columns, "HAZARD_RATIO")
+    out[columns] <- row[columns]
+    out$STATUS <- "ok"
+  }
+  out
+}
+
+
+# In a rank-deficient fit, an analyte listed before an aliased adjustment term
+# can still receive a finite coefficient. It is estimable only if its column
+# adds a direction that cannot be supplied by the other model terms.
+.outcome_analyte_estimable <- function(fit, outcome_type, model_data) {
+  if (!anyNA(stats::coef(fit))) return(TRUE)
+  design <- stats::model.matrix(fit, data = model_data)
+  if (!"analyte" %in% colnames(design)) return(FALSE)
+  if (outcome_type == "tte") design <- scale(design, center = TRUE, scale = FALSE)
+  without_analyte <- design[, colnames(design) != "analyte", drop = FALSE]
+  other_rank <- if (ncol(without_analyte)) qr(without_analyte)$rank else 0L
+  qr(design)$rank > other_rank
+}
+
+
+# Analyte-specific missingness can remove all but one level of an adjustment
+# factor. Apply the existing constant-covariate rule to the usable model rows.
+.prepare_outcome_model <- function(md, outcome_type, adjustment_terms) {
+  outcome_columns <- if (outcome_type == "continuous") "OUTCOME" else {
+    c("OUTCOME_TIME", "OUTCOME_STATUS")
+  }
+  columns <- c("analyte", "analyte_baseline", adjustment_terms, outcome_columns)
+  md <- md[complete.cases(md[, columns, drop = FALSE]), , drop = FALSE]
+  terms <- if (nrow(md)) .drop_uninformative_covariates(md, adjustment_terms) else adjustment_terms
+  list(data = md, formula = as.formula(.build_formula_string(
+    outcome_type, c("analyte_baseline", terms)
+  )))
+}
+
+
 .perform_continuous_analysis <- function(pheno_df, omics_df, pheno_baseline, omics_baseline,
                                          fu_level,
                                          additional_covariates = NULL,
@@ -117,14 +189,11 @@
   model_data$analyte <- NA_real_
   model_data$analyte_baseline <- NA_real_
 
-  covariate_terms <- "analyte_baseline"
   adjustment_terms <- c("TREATMENT_GROUP", "FEMALE")
   if (!is.null(additional_covariates)) {
     adjustment_terms <- c(adjustment_terms, additional_covariates)
   }
   adjustment_terms <- .drop_uninformative_covariates(model_data, adjustment_terms)
-  covariate_terms <- c(covariate_terms, adjustment_terms)
-  formula_str <- .build_formula_string("continuous", covariate_terms)
 
   analyte_names <- omics_df$ANALYTE_NAME
 
@@ -196,13 +265,10 @@
         }
         md$analyte_baseline <- item$baseline_vals
 
-        fit <- lm(as.formula(formula_str), data = md)
+        model <- .prepare_outcome_model(md, "continuous", adjustment_terms)
+        fit <- lm(model$formula, data = model$data)
         n_obs <- nrow(fit$model)
         coef_table <- summary(fit)$coefficients
-        analyte_idx <- match("analyte", rownames(coef_table))
-        if (is.na(analyte_idx)) {
-          stop("analyte coefficient was not estimable")
-        }
 
         coefs <- data.frame(
           ANALYTE_NAME = item$analyte_name,
@@ -216,26 +282,21 @@
           row.names = NULL
         )
 
-        oe <- data.frame(
-          ANALYTE_NAME = item$analyte_name,
-          FU = fu_level,
-          EFFECT_SIZE = coef_table[analyte_idx, "Estimate"],
-          SE = coef_table[analyte_idx, "Std. Error"],
-          P_VALUE = coef_table[analyte_idx, "Pr(>|t|)"],
-          stringsAsFactors = FALSE,
-          row.names = NULL
-        )
+        oe <- .extract_outcome_effect(coefs, item$analyte_name, fu_level, "continuous")
+        if (!.outcome_analyte_estimable(fit, "continuous", model$data)) {
+          oe <- .empty_outcome_result(item$analyte_name, fu_level, "continuous")$outcome_effects
+        }
 
         list(coefficients = coefs, outcome_effects = oe)
       }, error = function(e) {
         warning("Error processing analyte '", item$analyte_name, "' at FU=", fu_level, ": ", e$message)
-        NULL
+        .empty_outcome_result(item$analyte_name, fu_level, "continuous", "fit_error")
       })
 
       list(
         result = result,
         worker_pid = Sys.getpid(),
-        failed = is.null(result)
+        failed = any(result$outcome_effects$STATUS != "ok")
       )
     }, .options = furrr::furrr_options(seed = TRUE))
 
@@ -352,18 +413,15 @@
   model_data$analyte_baseline <- NA_real_
 
   if (sum(model_data$OUTCOME_STATUS == 1, na.rm = TRUE) == 0) {
-    warning("No outcome events found in this stratum at FU=", fu_level, "; returning NULL for this follow-up.")
-    return(NULL)
+    warning("No outcome events found in this stratum at FU=", fu_level, "; retaining unavailable outcome effects.")
+    return(.empty_outcome_result(omics_df$ANALYTE_NAME, fu_level, "tte"))
   }
 
-  covariate_terms <- "analyte_baseline"
   adjustment_terms <- c("TREATMENT_GROUP", "FEMALE")
   if (!is.null(additional_covariates)) {
     adjustment_terms <- c(adjustment_terms, additional_covariates)
   }
   adjustment_terms <- .drop_uninformative_covariates(model_data, adjustment_terms)
-  covariate_terms <- c(covariate_terms, adjustment_terms)
-  formula_str <- .build_formula_string("tte", covariate_terms)
 
   analyte_names <- omics_df$ANALYTE_NAME
 
@@ -435,14 +493,17 @@
         }
         md$analyte_baseline <- item$baseline_vals
 
-        fit <- survival::coxph(as.formula(formula_str), data = md, ties = "efron")
+        model <- .prepare_outcome_model(md, "tte", adjustment_terms)
+        if (nrow(model$data) > 0L && !any(model$data$OUTCOME_STATUS == 1)) {
+          return(list(
+            result = .empty_outcome_result(item$analyte_name, fu_level, "tte"),
+            worker_pid = Sys.getpid(), failed = TRUE
+          ))
+        }
+        fit <- survival::coxph(model$formula, data = model$data, ties = "efron")
         n_obs <- stats::nobs(fit)
         n_events <- fit$nevent
         coef_table <- summary(fit)$coefficients
-        analyte_idx <- match("analyte", rownames(coef_table))
-        if (is.na(analyte_idx)) {
-          stop("analyte coefficient was not estimable")
-        }
 
         coefs <- data.frame(
           ANALYTE_NAME = item$analyte_name,
@@ -458,27 +519,21 @@
           row.names = NULL
         )
 
-        oe <- data.frame(
-          ANALYTE_NAME = item$analyte_name,
-          FU = fu_level,
-          EFFECT_SIZE = coef_table[analyte_idx, "coef"],
-          HAZARD_RATIO = coef_table[analyte_idx, "exp(coef)"],
-          SE = coef_table[analyte_idx, "se(coef)"],
-          P_VALUE = coef_table[analyte_idx, "Pr(>|z|)"],
-          stringsAsFactors = FALSE,
-          row.names = NULL
-        )
+        oe <- .extract_outcome_effect(coefs, item$analyte_name, fu_level, "tte")
+        if (!.outcome_analyte_estimable(fit, "tte", model$data)) {
+          oe <- .empty_outcome_result(item$analyte_name, fu_level, "tte")$outcome_effects
+        }
 
         list(coefficients = coefs, outcome_effects = oe)
       }, error = function(e) {
         warning("Error processing analyte '", item$analyte_name, "' at FU=", fu_level, ": ", e$message)
-        NULL
+        .empty_outcome_result(item$analyte_name, fu_level, "tte", "fit_error")
       })
 
       list(
         result = result,
         worker_pid = Sys.getpid(),
-        failed = is.null(result)
+        failed = any(result$outcome_effects$STATUS != "ok")
       )
     }, .options = furrr::furrr_options(seed = TRUE, packages = "survival"))
 
@@ -679,7 +734,7 @@
     )
   }
 
-  if (length(all_coefficients) == 0 || length(all_outcome_effects) == 0) {
+  if (length(all_outcome_effects) == 0) {
     return(NULL)
   }
 
@@ -705,9 +760,8 @@
     outcome_effects,
     group_col = "FU"
   )
-  outcome_effects <- outcome_effects[
-    order(outcome_effects$ANALYTE_NAME, outcome_effects$FU),
-  ]
+  outcome_order <- order(outcome_effects$ANALYTE_NAME, outcome_effects$FU)
+  outcome_effects <- outcome_effects[outcome_order, ]
 
   list(
     coefficients = coefficients,
@@ -717,7 +771,11 @@
 
 
 .add_filtered_bh_column <- function(df, filtered_probes, group_col) {
-  if (is.null(df) || nrow(df) == 0) {
+  if (is.null(df)) {
+    return(df)
+  }
+  if (nrow(df) == 0) {
+    df$BH_P_VALUE_FILTERED <- numeric(0)
     return(df)
   }
 
@@ -750,6 +808,10 @@
       filtered_probes,
       group_col = "FU"
     )
+    if (!is.null(outputs[[stratum]]$outcome_effects)) {
+      outputs[[stratum]]$outcome_effects$IN_FILTERED_SET <-
+        outputs[[stratum]]$outcome_effects$ANALYTE_NAME %in% filtered_probes
+    }
   }
 
   outputs
@@ -794,7 +856,7 @@
     )
 
     if (is.null(analysis_results)) {
-      outputs[[dataset]] <- NULL
+      outputs[dataset] <- list(NULL)
       .log_33(
         verbose,
         paste0(

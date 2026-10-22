@@ -38,6 +38,7 @@ if (!file.exists(.outcomewas_source_file) &&
 }
 .outcomewas_dir <- dirname(normalizePath(.outcomewas_source_file, mustWork = TRUE))
 
+source(file.path(.outcomewas_dir, "R", "treatment_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "validation_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "reporting_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "analysis_helpers.R"))
@@ -52,7 +53,8 @@ FAST_outcome_WAS <- function(pheno,
                              n_cores = NULL,
                              checkpoint_dir = NULL,
                              checkpoint_batch_size = 2000L,
-                             verbose = FALSE) {
+                             verbose = FALSE,
+                             treatment_labels = NULL) {
 
   analysis_started <- proc.time()[["elapsed"]]
 
@@ -83,7 +85,7 @@ FAST_outcome_WAS <- function(pheno,
   .log_33(verbose, "analysis validating inputs and preparing data (serial)")
   .validate_omics_type(omics_type)
 
-  pheno_list <- .validate_pheno(pheno, additional_covariates)
+  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels)
   omics_list <- .validate_omics(omics, pheno_list, verbose = verbose)
 
   filtered_probes <- NULL
@@ -149,7 +151,8 @@ FAST_outcome_WAS <- function(pheno,
 
   list(
     analysis_change = analysis_change,
-    analysis_level = analysis_level
+    analysis_level = analysis_level,
+    metadata = .outcome_metadata(pheno_list, additional_covariates)
   )
 }
 
@@ -158,14 +161,15 @@ FAST_outcome_WAS_reports <- function(pheno,
                                      omics,
                                      omics_type = "Proteomics",
                                      additional_covariates = NULL,
-                                     verbose = FALSE) {
+                                     verbose = FALSE,
+                                     treatment_labels = NULL) {
 
   reports_started <- proc.time()[["elapsed"]]
   .log_33(verbose, "reports validating inputs (serial)")
 
   .validate_omics_type(omics_type)
 
-  pheno_list <- .validate_pheno(pheno, additional_covariates)
+  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels)
   omics_list <- .validate_omics(omics, pheno_list, verbose = verbose)
 
   if (omics_type == "DNAm") {
@@ -193,5 +197,6 @@ FAST_outcome_WAS_reports <- function(pheno,
     )
   )
 
+  reports$metadata <- .outcome_metadata(pheno_list, additional_covariates)
   reports
 }

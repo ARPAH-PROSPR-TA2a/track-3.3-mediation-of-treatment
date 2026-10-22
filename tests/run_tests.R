@@ -1,9 +1,13 @@
 test_scripts <- c(
   file.path("tests", "mediation", "test_input_generation.R"),
   file.path("tests", "mediation", "test_comprehensive.R"),
+  file.path("tests", "mediation", "test_multiarm.R"),
+  file.path("tests", "mediation", "test_upstream_multiarm.R"),
   file.path("tests", "mediation", "test_dnam_mediation_runners.R"),
   file.path("tests", "outcomewas", "test_protein_annotation.R"),
   file.path("tests", "outcomewas", "test_comprehensive.R"),
+  file.path("tests", "outcomewas", "test_multiarm.R"),
+  file.path("tests", "outcomewas", "test_multiarm_reports.R"),
   file.path("tests", "outcomewas", "test_reporting_summaries.R"),
   file.path("tests", "outcomewas", "test_dnam_betas.R"),
   file.path("tests", "outcomewas", "test_dnam_runner_followups.R"),

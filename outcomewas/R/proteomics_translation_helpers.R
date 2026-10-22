@@ -139,7 +139,8 @@
     stop(table_name, "$ANALYTE_NAME must not contain missing or blank values.")
   }
 
-  result_fu <- .as_positive_integer_fu(
+  # A failed model can retain outcome placeholders with no fitted coefficients.
+  result_fu <- if (!nrow(result_table)) integer() else .as_positive_integer_fu(
     result_table$FU,
     paste0(table_name, "$FU")
   )
@@ -164,6 +165,8 @@
   if (table_name == "coefficients") {
     key_columns <- c(key_columns, "COEFFICIENT")
     key_values$COEFFICIENT <- result_table$COEFFICIENT
+  } else if ("ARM" %in% names(result_table)) {
+    stop("outcome_effects must contain one common analyte slope per ANALYTE_NAME x FU; ARM tables are not supported.")
   }
   if (anyDuplicated(key_values)) {
     stop(table_name, " must have unique ", paste(key_columns, collapse = " x "), " rows.")

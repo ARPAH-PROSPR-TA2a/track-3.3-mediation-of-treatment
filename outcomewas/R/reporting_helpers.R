@@ -18,12 +18,62 @@
                        pheno_df$FEMALE == report$FEMALE[i], ]
     report$N_SUBJECTS[i] <- length(unique(cell$SUBJECT_ID))
     report$N_CONTROL[i] <- length(unique(cell$SUBJECT_ID[cell$TREATMENT_GROUP == 0]))
-    report$N_TREATMENT[i] <- length(unique(cell$SUBJECT_ID[cell$TREATMENT_GROUP == 1]))
+    report$N_TREATMENT[i] <- length(unique(cell$SUBJECT_ID[cell$TREATMENT_GROUP != 0]))
     report$N_SAMPLES[i] <- nrow(cell)
   }
 
   rownames(report) <- NULL
   report
+}
+
+
+.report_treatments <- function(pheno_df, treatments = NULL) {
+  if (!is.null(treatments)) return(treatments)
+  arms <- as.character(sort(unique(as.integer(as.character(pheno_df$TREATMENT_GROUP)))))
+  arms <- arms[arms != "0"]
+  data.frame(
+    ARM = arms, TREATMENT = if (length(arms) == 1L) "Treatment" else arms,
+    REFERENCE = "Control", CONTRAST = paste0(arms, "_vs_0"),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+.create_arm_counts_report <- function(pheno_df, treatments) {
+  cells <- unique(pheno_df[, c("FU", "FEMALE")])
+  cells <- cells[order(cells$FU, cells$FEMALE), , drop = FALSE]
+  arms <- c("0", as.character(treatments$ARM))
+  labels <- c(as.character(treatments$REFERENCE[1L]), as.character(treatments$TREATMENT))
+  rows <- vector("list", nrow(cells) * length(arms))
+  index <- 0L
+  for (i in seq_len(nrow(cells))) {
+    for (j in seq_along(arms)) {
+      cell <- pheno_df[pheno_df$FU == cells$FU[i] &
+                         pheno_df$FEMALE == cells$FEMALE[i] &
+                         as.character(pheno_df$TREATMENT_GROUP) == arms[j], , drop = FALSE]
+      index <- index + 1L
+      rows[[index]] <- data.frame(
+        FU = cells$FU[i], FEMALE = cells$FEMALE[i], ARM = arms[j],
+        TREATMENT = labels[j], IS_CONTROL = arms[j] == "0",
+        N_SUBJECTS = length(unique(cell$SUBJECT_ID)), N_SAMPLES = nrow(cell),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  do.call(rbind, rows)
+}
+
+
+.outcome_report_groups <- function(pheno_df, treatments = NULL) {
+  treatments <- .report_treatments(pheno_df, treatments)
+  pheno_subject <- .subject_level_outcome_frame(pheno_df)
+  arms <- c("0", as.character(treatments$ARM))
+  labels <- c(as.character(treatments$REFERENCE[1L]), as.character(treatments$TREATMENT))
+  group_names <- if (length(arms) == 2L) c("control", "treatment") else paste0("arm_", arms)
+  groups <- c(list(all = pheno_subject), setNames(lapply(arms, function(arm) {
+    pheno_subject[as.character(pheno_subject$TREATMENT_GROUP) == arm, , drop = FALSE]
+  }), group_names))
+  list(groups = groups, arms = c(NA_character_, arms), labels = c(NA_character_, labels))
 }
 
 
@@ -172,14 +222,10 @@
 }
 
 
-.create_continuous_outcome_report <- function(pheno_df) {
+.create_continuous_outcome_report <- function(pheno_df, treatments = NULL) {
 
-  pheno_subject <- .subject_level_outcome_frame(pheno_df)
-  groups <- list(
-    all = pheno_subject,
-    control = pheno_subject[pheno_subject$TREATMENT_GROUP == 0, ],
-    treatment = pheno_subject[pheno_subject$TREATMENT_GROUP == 1, ]
-  )
+  grouped <- .outcome_report_groups(pheno_df, treatments)
+  groups <- grouped$groups
 
   report <- data.frame(
     GROUP = names(groups),
@@ -195,6 +241,7 @@
   for (i in seq_along(groups)) {
     values <- groups[[i]]$OUTCOME
     report$N_SUBJECTS[i] <- length(values)
+    if (length(values) == 0L) next
     report$MEAN[i] <- mean(values, na.rm = TRUE)
     report$MEDIAN[i] <- median(values, na.rm = TRUE)
     report$SD[i] <- sd(values, na.rm = TRUE)
@@ -202,18 +249,16 @@
     report$MAX[i] <- max(values, na.rm = TRUE)
   }
 
+  report$ARM <- grouped$arms
+  report$TREATMENT <- grouped$labels
   report
 }
 
 
-.create_tte_outcome_report <- function(pheno_df) {
+.create_tte_outcome_report <- function(pheno_df, treatments = NULL) {
 
-  pheno_subject <- .subject_level_outcome_frame(pheno_df)
-  groups <- list(
-    all = pheno_subject,
-    control = pheno_subject[pheno_subject$TREATMENT_GROUP == 0, ],
-    treatment = pheno_subject[pheno_subject$TREATMENT_GROUP == 1, ]
-  )
+  grouped <- .outcome_report_groups(pheno_df, treatments)
+  groups <- grouped$groups
 
   report <- data.frame(
     GROUP = names(groups),
@@ -233,6 +278,7 @@
     report$N_SUBJECTS[i] <- nrow(df)
     report$N_EVENTS[i] <- sum(df$OUTCOME_STATUS == 1, na.rm = TRUE)
     report$N_CENSORED[i] <- sum(df$OUTCOME_STATUS == 0, na.rm = TRUE)
+    if (nrow(df) == 0L) next
     report$EVENT_RATE[i] <- mean(df$OUTCOME_STATUS == 1, na.rm = TRUE)
     report$TIME_MEAN[i] <- mean(df$OUTCOME_TIME, na.rm = TRUE)
     report$TIME_MEDIAN[i] <- median(df$OUTCOME_TIME, na.rm = TRUE)
@@ -240,6 +286,8 @@
     report$TIME_MAX[i] <- max(df$OUTCOME_TIME, na.rm = TRUE)
   }
 
+  report$ARM <- grouped$arms
+  report$TREATMENT <- grouped$labels
   report
 }
 
@@ -249,6 +297,7 @@
                               verbose = FALSE) {
 
   outcome_type <- match.arg(outcome_type)
+  treatments <- .report_treatments(pheno_list$all, pheno_list$treatments)
 
   variable_summaries <- list(all = NULL, male = NULL, female = NULL)
 
@@ -264,7 +313,7 @@
     pheno_df <- pheno_list[[dataset]]
     omics_df <- omics_list[[dataset]]
     fu_levels <- as.character(sort(unique(as.integer(as.character(pheno_df$FU)))))
-    tx_levels <- c("0", "1")
+    tx_levels <- c("0", as.character(treatments$ARM))
     cell_reports <- list()
 
     for (fu in fu_levels) {
@@ -318,9 +367,9 @@
 
   .log_33(verbose, "reports outcome summary (serial)")
   outcome_summary <- if (outcome_type == "continuous") {
-    .create_continuous_outcome_report(pheno_list$all)
+    .create_continuous_outcome_report(pheno_list$all, treatments)
   } else {
-    .create_tte_outcome_report(pheno_list$all)
+    .create_tte_outcome_report(pheno_list$all, treatments)
   }
 
   outcome_reports <- list(
@@ -332,6 +381,7 @@
   .log_33(verbose, "reports phenotype summary (serial)")
   list(
     pheno_summary = .create_pheno_data_report(pheno_list$all),
+    arm_counts = .create_arm_counts_report(pheno_list$all, treatments),
     variable_summaries = variable_summaries,
     outcome_reports = outcome_reports
   )

@@ -1,11 +1,12 @@
 # Mediation
 
-This product-of-coefficients mediation pipeline combines the
-treatment-to-analyte estimates from FAST
-Track 1.1.1 with the analyte-to-outcome estimates from OutcomeWAS. The indirect
-effect for each analyte and follow-up is the product of coefficients
-`alpha * beta`; inference uses the conventional Sobel delta-method standard
-error and normal approximation.
+This product-of-coefficients pipeline combines treatment-to-analyte estimates
+from FAST Track 1.1.1 with analyte-to-outcome estimates from OutcomeWAS. It
+returns a separate indirect effect for each analyte, follow-up, and treatment
+contrast. Inference retains the conventional Sobel delta-method standard error
+and normal approximation.
+
+Ordinary binary calls remain unchanged:
 
 ```r
 source(file.path("mediation", "main.R"))
@@ -17,23 +18,56 @@ mediation_results <- FAST_mediation(
 )
 ```
 
-Both inputs must be complete results objects from their respective pipelines.
-The function aligns results within each analysis type and sex stratum using
-`ANALYTE_NAME` and `FU`. Sex-specific strata are optional; a dataset containing
-only `all` is valid. See `INPUTS_OUTPUTS.md` for the complete contract,
-statistical formulas, and interpretation boundaries.
+Both inputs are result objects from their respective pipelines, with matching
+analysis types and compatible study populations, analyte scales, and follow-up
+definitions. Sex-specific strata are optional; an object containing only `all`
+is valid. Complete legacy binary tables remain supported.
 
-The pipeline is self-contained and does not source either upstream pipeline.
-The example input-generation test separately verifies live interoperability
-with Track 1.1.1 and OutcomeWAS when a Track 1.1.1 checkout is available.
+For multiple arms, Track 1.1.1 supplies one alpha per `CONTRAST`, such as
+`1_vs_0` and `2_vs_0`. OutcomeWAS supplies one common beta per analyte and
+follow-up, adjusted for all categorical treatment arms in the same model.
+Mediation pairs each contrast with that beta: `alpha_1 * beta`,
+`alpha_2 * beta`, and so on. The treatment coefficients in the outcome model
+are adjustment terms, not additional beta paths.
+
+Different interventions can change an analyte by different amounts. The model
+assumes that a unit change in that analyte has the same outcome association
+across arms. This extends the ordinary binary workflow without changing its
+outcome model or adding treatment interactions.
+
+For continuous outcomes, pure and total natural indirect effects coincide
+under this common-slope model. A causal interpretation still requires timing
+and mediation identification assumptions. For survival outcomes, the
+exponentiated product is retained as an approximation; it is not generally a
+causal indirect hazard ratio.
+
+Outputs preserve `CONTRAST`, readable treatment/reference labels, and
+availability statuses. Unavailable paths remain visible with `NA` indirect
+inference. BH correction is within analysis, stratum, FU, and contrast; filtered
+DNAm correction uses explicit `IN_FILTERED_SET` membership.
+
+The pipeline uses summary results only and does not source or refit either
+upstream pipeline. Sobel inference ignores alpha–beta covariance, and the
+summary tables do not supply covariance for comparing interventions.
+
+Run `Rscript tests/mediation/test_multiarm.R` for contrast and inference checks.
+`Rscript tests/mediation/test_upstream_multiarm.R` additionally fits the synthetic
+data through the local Track 1.1.1 checkout, then OutcomeWAS and mediation; set
+`TRACK111_DIR` if that checkout is not the sibling directory. All suites are
+registered in `Rscript tests/run_tests.R`.
+
+The statistical interpretation follows the no-treatment-interaction case in
+[Valeri and VanderWeele's mediation framework](https://pubmed.ncbi.nlm.nih.gov/23379553/). The additional
+limitations of Cox products are discussed in [VanderWeele's survival mediation
+paper](https://pubmed.ncbi.nlm.nih.gov/21642779/).
 
 Documentation:
 
-- [INPUTS_OUTPUTS.md](INPUTS_OUTPUTS.md): complete user-facing data contract.
-- [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md): implementation flow, calculations,
-  validation, and output structure.
-- [Examples/README.md](Examples/README.md): reproducible paired example.
+- [INPUTS_OUTPUTS.md](INPUTS_OUTPUTS.md): input/output contract and interpretation.
+- [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md): validation, joins, and calculations.
+- [Examples/README.md](Examples/README.md): paired binary and synthetic multi-arm
+  examples.
 - [CALERIE DNAm beta / INF runner](CALERIE/DNAm/INF_24mo/README.md): production
-  input paths, preflight checks, resource guidance, launch command and outputs.
+  inputs, checks, resource guidance, and outputs.
 - [CALERIE DNAm beta / MetS runner](CALERIE/DNAm/MetS_24mo/README.md): the same
-  workflow for the 24-month MetS outcome, with separate outputs and logs.
+  workflow for the 24-month MetS outcome.

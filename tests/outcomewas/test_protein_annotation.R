@@ -462,4 +462,33 @@ expect_true(identical(readRDS(output_rds), annotated),
             "Caller can save and reload the complete annotated result object")
 unlink(output_rds)
 
+multiarm_effects <- make_effects()
+multiarm_effects$STATUS <- "ok"
+multiarm_effects$STATUS[1L] <- "not_estimable"
+multiarm_effects[1L, c("EFFECT_SIZE", "SE", "P_VALUE", "BH_P_VALUE")] <- NA_real_
+multiarm_results <- make_results(effects = multiarm_effects)
+multiarm_results$metadata <- list(
+  analyte_slope = "common_across_treatment_arms",
+  treatment_labels = c(`0` = "Control", `2` = "Diet", `7` = "Exercise")
+)
+multiarm_annotated <- get_annotated_results(multiarm_results, annotation)
+expect_true(identical(multiarm_annotated$analysis_change$all$outcome_effects[names(multiarm_effects)],
+                      multiarm_effects) && identical(multiarm_annotated$metadata, multiarm_results$metadata),
+            "Multi-arm annotation preserves common slopes, unavailable rows and treatment metadata")
+unsupported <- multiarm_results
+unsupported$analysis_change$all$outcome_effects$ARM <- "2"
+expect_error(get_annotated_results(unsupported, annotation),
+             "ARM tables are not supported", "Per-arm beta tables are rejected")
+failed_results <- make_results(coefficients = make_coefficients()[0L, ], effects = multiarm_effects)
+for (analysis in c("analysis_change", "analysis_level")) {
+  for (stratum in c("all", "male")) {
+    failed_results[[analysis]][[stratum]]$outcome_effects$STATUS <- "fit_error"
+    failed_results[[analysis]][[stratum]]$outcome_effects[c("EFFECT_SIZE", "SE", "P_VALUE", "BH_P_VALUE")] <- NA_real_
+  }
+}
+failed_annotated <- get_annotated_results(failed_results, annotation, c(`1` = "Visit 1", `5` = "Visit 5"))
+expect_true(nrow(failed_annotated$analysis_change$all$coefficients) == 0L &&
+              nrow(failed_annotated$analysis_change$all$outcome_effects) == nrow(multiarm_effects),
+            "All-failed cells retain annotated outcome placeholders and empty coefficient tables")
+
 cat("\nAll OutcomeWAS protein annotation tests passed.\n")

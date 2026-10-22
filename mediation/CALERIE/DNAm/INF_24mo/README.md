@@ -37,20 +37,30 @@ verify participant overlap or measurement scale.
 
 The runner requires both analyses (`analysis_change`, `analysis_level`), all
 three strata (`all`, `male`, `female`), both FUs, and nonempty filtered probe
-sets. The core validates finite estimates, positive SEs, unique keys, and
-matching filtered-probe membership. Partial joins stop for review. No upstream
-significance screening is applied before mediation; BH is calculated separately
-within each analysis/stratum/FU and within the filtered probes.
+sets. Available estimates must be finite with positive SEs; explicit
+unavailable rows remain visible through their statuses. Filtered counts use
+`IN_FILTERED_SET` independently of inference, with the complete legacy
+fallback supported by the core. The runner requires complete joins, so a
+missing key still stops for review even though the core can preserve individual
+missing-beta placeholders.
+
+No upstream significance screening is applied. Mediation BH is calculated
+within each analysis/stratum/FU/contrast and separately within filtered members.
+OutcomeWAS uses its existing common-beta model with categorical treatment
+adjustment. Each alpha contrast uses the same beta for its analyte/FU; no model
+option or interaction terms are added. Resume checkpoints only with unchanged
+upstream data and settings; use a fresh directory after changing them.
 
 ## Outputs and resources
 
 Default output folder: `~/FAST/Outputs/3.3/DNAm_betas_3.3Med_INF/`.
 
 - `DNAm_betas_3.3Med_INF_results.rds`: nested indirect effects and join diagnostics.
-- `summary.tsv`: tested/filtered counts and significance counts for all 12
-  analysis/stratum/FU combinations.
+- `summary.tsv`: requested, available, unavailable, filtered, and significant counts
+  for each observed analysis/stratum/FU/contrast, with readable treatment and
+  reference labels. The binary study retains 12 analysis/stratum/FU cells.
 - `provenance.rds`: input and repository paths, timing, FU definitions, method,
-  and R session information.
+  common-slope provenance, and R session information.
 - `run.log`: timestamped input paths, load times and object sizes, per-FU/stratum
   input and filtered counts, join diagnostics, mediation/save times, the full
   significance summary, and completion.

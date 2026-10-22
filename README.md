@@ -14,6 +14,13 @@ The pipelines are separate user surfaces and do not source or run one another
 implicitly. Mediation explicitly accepts result objects produced
 by Track 1.1.1 and OutcomeWAS.
 
+For multiple treatment arms, Track 1.1.1 supplies a separate treatment-to-analyte
+alpha effect for each active-versus-control contrast. OutcomeWAS retains its
+existing joint model with categorical treatment adjustment and one common
+analyte-to-outcome beta. Mediation reuses that beta for each `alpha_k * beta`
+product, preserving contrasts and labels. The treatment-adjustment coefficients
+are not separate beta paths.
+
 ## Current Entry Point
 
 Source the entry point for the pipeline you intend to run. For OutcomeWAS:

@@ -1,7 +1,7 @@
 # Helper function for NZV detection
 .is_near_zero_variance <- function(x) {
   if (!is.numeric(x)) return(FALSE)
-  if (all(is.na(x))) return(FALSE)
+  if (sum(!is.na(x)) < 2L) return(FALSE)
   var(x, na.rm = TRUE) < 1e-8
 }
 
@@ -63,7 +63,7 @@
 }
 
 
-.validate_pheno <- function(pheno, additional_covariates = NULL) {
+.validate_pheno <- function(pheno, additional_covariates = NULL, treatment_labels = NULL) {
 
   if (is.matrix(pheno)) {
     pheno <- as.data.frame(pheno)
@@ -125,16 +125,8 @@
   }
   pheno$FEMALE <- factor(pheno$FEMALE)
 
-  if (!all(pheno$TREATMENT_GROUP %in% 0:1)) {
-    stop("TREATMENT_GROUP must contain only values 0 or 1")
-  }
-  if (!any(pheno$TREATMENT_GROUP == 0) || !any(pheno$TREATMENT_GROUP == 1)) {
-    stop("pheno must contain both control (TREATMENT_GROUP == 0) and treatment (TREATMENT_GROUP == 1)")
-  }
-  if (!is.factor(pheno$TREATMENT_GROUP)) {
-    warning("TREATMENT_GROUP column is not a factor. Converting to factor.")
-  }
-  pheno$TREATMENT_GROUP <- factor(pheno$TREATMENT_GROUP)
+  prepared <- .prepare_treatments(pheno, treatment_labels)
+  pheno <- prepared$pheno
 
   if (any(duplicated(pheno$SAMPLE_ID))) {
     stop("SAMPLE_ID contains duplicate values")
@@ -251,7 +243,9 @@
     male = male_pheno,
     female = female_pheno,
     outcome_type = outcome_type,
-    requires_mixed_effects = FALSE
+    requires_mixed_effects = FALSE,
+    treatments = prepared$treatments,
+    treatment_labels = prepared$treatment_labels
   )
 }
 

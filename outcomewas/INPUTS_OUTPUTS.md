@@ -44,7 +44,7 @@ Required columns for all runs:
 | `SAMPLE_ID` | character | Unique sample identifier; no duplicates |
 | `SUBJECT_ID` | character | Subject identifier shared across visits |
 | `FU` | factor or integer-coded numeric | Visit index; baseline is `0`; values must be consecutive integers and include `0` and `1` |
-| `TREATMENT_GROUP` | factor or integer-coded numeric | Binary treatment assignment; `0` = control, `1` = treatment; both arms must be present |
+| `TREATMENT_GROUP` | factor or integer-coded numeric | Categorical assignment; `0` = control, positive integers = active arms; control and at least one active arm required |
 | `FEMALE` | factor or integer-coded numeric | Binary sex indicator; `0` = male, `1` = female |
 
 Outcome columns must follow exactly one of these two schemas:
@@ -53,6 +53,23 @@ Outcome columns must follow exactly one of these two schemas:
 |:---|:---|:---|
 | Continuous | `OUTCOME` | Numeric; constant within each `SUBJECT_ID` |
 | Time-to-event | `OUTCOME_TIME`, `OUTCOME_STATUS` | `OUTCOME_TIME` is numeric, non-negative, and measured in years; `OUTCOME_STATUS` is binary `0/1`; both are constant within each `SUBJECT_ID` |
+
+Treatment codes are preserved and need not be consecutive. They must be
+nonmissing, nonnegative integer codes and constant within each subject, checked
+before dropping duplicate visits or incomplete covariates. All arms enter one
+joint model with one common analyte slope. The formula and inference remain
+the same as the binary workflow.
+
+`treatment_labels` is an optional argument to both public functions. It
+is required when there are multiple active arms. Supply a named character vector
+whose names match every observed code exactly, including control, with unique,
+nonmissing, nonblank labels:
+
+```r
+treatment_labels = c(`0` = "Control", `1` = "Diet", `2` = "Exercise")
+```
+
+Binary calls need no changes: the default labels are `Control` and `Treatment`.
 
 Optional additional covariates:
 
@@ -141,10 +158,12 @@ DNAm scale:
   `"Proteomics"`, `"Metabolomics"`, `"DNAm"`, or `"other"`. Use `"other"`
   for non-omics analytes; it does not emit a preprocessing reminder. DNAm runs
   also check probe-list coverage, subset to the full probe list, and add a
-  filtered-probe BH correction column.
+  filtered-probe BH correction column and explicit result membership.
 - `additional_covariates`: Optional character vector naming extra phenotype
   columns to include as model covariates. These covariates are taken from the
   follow-up row used for each analysis.
+- `treatment_labels`: Optional named treatment-code mapping described above.
+  Accepted by both public functions; required with multiple active arms.
 - `n_cores`: `FAST_outcome_WAS()` only. Number of workers for parallel model
   fitting. Defaults to `max(1, parallel::detectCores() - 1)`, with
   `future::availableCores()` as the fallback when detection is unavailable.
@@ -165,7 +184,9 @@ checkpoint_dir/
 - Reuse a checkpoint directory only for the same inputs, outcome, covariates,
   visit coding, analyte order, and batch size. Checkpoints are loaded by file
   existence and do not validate those settings. Beta runs must use separate
-  directories from M-value runs.
+  directories from M-value runs. Use a fresh directory after changing treatment
+  labels or upgrading across this schema change. Resume assumes unchanged data
+  and settings; there is no run fingerprint.
 - `verbose`: Logical flag accepted by both public functions. Default: `FALSE`.
   When `TRUE`, emits `[3.3]` validation and stage progress. Analysis logs include
   response/stratum/FU labels, checkpoint reuse, worker PIDs, failures, and
@@ -181,7 +202,9 @@ OutcomeWAS runs two analyte definitions for every eligible nonzero follow-up:
 - `analysis_change`: analyte value at follow-up minus analyte value at baseline.
 - `analysis_level`: analyte value at follow-up.
 
-Both analyses adjust for the baseline analyte value.
+Both analyses adjust for the baseline analyte value. `TREATMENT_GROUP` is a
+factor. The model adjusts jointly for the arms while
+estimating one common analyte slope.
 
 For a continuous outcome, the model is:
 
@@ -211,6 +234,20 @@ In sex-stratified analyses, `FEMALE` is usually dropped automatically because it
 is constant within the stratum. Other covariates with only one observed value in
 a specific model subset are also dropped.
 
+The analyte coefficient is the common beta path across treatment arms. The
+separate treatment-adjustment coefficients are not beta paths. No
+analyte-by-treatment or baseline-analyte-by-treatment interactions are added.
+
+Beta is a linear slope for continuous outcomes or a log-hazard slope for
+survival outcomes, subject to proportional hazards. Each analyte/FU/analysis/
+stratum has its own fit. Beta uses the usable observations in that fit;
+filtering can reduce which arms are represented.
+
+These are adjusted associations. A causal mediation interpretation additionally
+requires temporal ordering, compatible alpha/beta populations and scales, and
+appropriate mediator–outcome confounding assumptions. OutcomeWAS does not
+perform landmarking or construct a post-mediator survival risk window.
+
 ---
 
 ## Outputs
@@ -222,19 +259,39 @@ Returns:
 ```r
 list(
   analysis_change = list(all = ..., male = ..., female = ...),
-  analysis_level  = list(all = ..., male = ..., female = ...)
+  analysis_level  = list(all = ..., male = ..., female = ...),
+  metadata = list(...)
 )
 ```
 
 Each non-`NULL` stratum contains two tables:
 
 - `coefficients`: all model terms.
-- `outcome_effects`: analyte term only; this is the primary result table for
-  most downstream review.
+- `outcome_effects`: the common analyte slope; this is the primary
+  result table for downstream review.
 
-Sex-specific strata are `NULL` when the subset is unavailable. For
-time-to-event analyses, a follow-up/stratum with zero events is skipped with a
-warning.
+Sex-specific strata are `NULL` when the subset is unavailable. Requested
+analyte/FU result rows remain visible when a fit is unavailable, including
+zero-event survival cells. Their `STATUS` describes availability and inference
+is `NA`; failed fits have no coefficient rows.
+
+`metadata` includes:
+
+| Field | Meaning |
+|:---|:---|
+| `schema_version` | `"2.0"` |
+| `treatment_labels` | Named code-to-label vector |
+| `treatments` | Active-arm mapping: `ARM`, `TREATMENT`, `REFERENCE`, `CONTRAST` |
+| `outcome_type` | `"continuous"` or `"tte"` |
+| `additional_covariates` | Requested adjustment columns |
+| `analyte_slope` | `"common_across_treatment_arms"` |
+| `model_formula` | Requested formula before constant adjustments are dropped |
+| `inference` | Model covariance with pooled-residual-df t tests (linear) or Wald z tests and Efron ties (Cox) |
+| `variance_assumption` | Common residual variance (linear) or common baseline hazard (Cox) |
+| `p_adjust` | BH within analysis, stratum and FU |
+
+The contrast mapping is study metadata. `outcome_effects` contains one common
+beta per analyte/FU, with no arm or contrast key.
 
 ---
 
@@ -282,16 +339,17 @@ Additional columns:
 
 ### `$outcome_effects`
 
-One row per analyte and follow-up. This table keeps only the analyte term from
-`coefficients`.
+Within each analysis and stratum, the unique key is `ANALYTE_NAME × FU`.
+Available rows contain the common analyte slope; unavailable rows preserve the
+same key. There are no `ARM`, `CONTRAST`, `TREATMENT`, or `REFERENCE` columns.
 
 Example:
 
 ```text
-ANALYTE_NAME  FU  EFFECT_SIZE  SE     P_VALUE  BH_P_VALUE
-protein_A     1   0.312        0.067  0.000    0.002
-protein_B     1  -0.028        0.061  0.647    0.712
-protein_C     2   0.198        0.077  0.011    0.044
+ANALYTE_NAME  FU  EFFECT_SIZE  SE     P_VALUE  STATUS         BH_P_VALUE
+protein_A     1   0.312        0.067  0.000    ok             0.002
+protein_B     1  -0.028        0.061  0.647    ok             0.712
+protein_C     2   NA           NA     NA       not_estimable  NA
 ```
 
 Common columns:
@@ -303,14 +361,20 @@ Common columns:
 | `EFFECT_SIZE` | Analyte coefficient estimate |
 | `SE` | Standard error |
 | `P_VALUE` | Raw p-value |
-| `BH_P_VALUE` | Benjamini-Hochberg adjusted p-value within each `FU` |
+| `STATUS` | `ok`, `not_estimable` (no usable/estimable analyte inference), or `fit_error` (model fitting raised an error) |
+| `BH_P_VALUE` | BH among available tests within `FU`; analyses and strata remain separate |
 
 Additional columns:
 
 | Column | Present when | Meaning |
 |:---|:---|:---|
 | `HAZARD_RATIO` | Time-to-event outcome | `exp(EFFECT_SIZE)` |
-| `BH_P_VALUE_FILTERED` | DNAm | BH correction within the filtered probe set; `NA` for probes outside that set |
+| `BH_P_VALUE_FILTERED` | DNAm | BH among available tests within the filtered probe set; `NA` outside the set or when unavailable |
+| `IN_FILTERED_SET` | DNAm | Logical membership in the filtered probe list, independent of inference |
+
+`IN_FILTERED_SET` is added after batch assembly and is present only on DNAm
+`outcome_effects`. It remains `TRUE` for an included probe with unavailable
+inference. A missing filtered p-value alone cannot determine membership.
 
 ---
 
@@ -372,9 +436,8 @@ and supplies the row-wise `FU_LABEL` field. This explicit mapping supports
 arbitrary follow-up values without imposing CALERIE's four-visit convention.
 When `fu_labels = NULL`, `FU_LABEL` is omitted.
 
-For continuous outcomes with `fu_labels` supplied, each annotated
-`outcome_effects` table has exactly these 15 columns, in the same order as Track
-1.1.1 annotated treatment-effect tables:
+For continuous outcomes with `fu_labels` supplied, annotated
+`outcome_effects` preserve these columns:
 
 ```text
 ANALYTE_NAME
@@ -391,12 +454,13 @@ FU_LABEL
 EFFECT_SIZE
 SE
 P_VALUE
+STATUS
 BH_P_VALUE
 ```
 
-Without `fu_labels`, the continuous table omits `FU_LABEL` and has 14 columns.
-For time-to-event outcomes, the same contract also contains `HAZARD_RATIO`
-immediately after `EFFECT_SIZE`. All source columns following `FU` retain their
+Without `fu_labels`, the continuous table omits `FU_LABEL`.
+For time-to-event outcomes, the same contract also preserves `HAZARD_RATIO`
+in source-column order. All source columns following `FU` retain their
 original relative order, so any additional fields are preserved.
 
 For `coefficients`, annotation is placed before the original coefficient
@@ -455,7 +519,9 @@ Returns:
 list(
   pheno_summary = ...,
   variable_summaries = ...,
-  outcome_reports = ...
+  outcome_reports = ...,
+  arm_counts = ...,
+  metadata = ...
 )
 ```
 
@@ -479,13 +545,22 @@ Columns:
 | `FEMALE` | Sex indicator |
 | `N_SUBJECTS` | Number of unique subjects |
 | `N_CONTROL` | Number of unique control subjects |
-| `N_TREATMENT` | Number of unique treatment subjects |
+| `N_TREATMENT` | Number of unique subjects across all active arms |
 | `N_SAMPLES` | Number of sample rows |
+
+### `arm_counts`
+
+Labeled counts by follow-up, sex, and treatment code supplement the familiar
+pooled `N_TREATMENT` field. This table retains every arm separately; the label
+mapping is also available in `metadata$treatment_labels`. Columns are `FU`,
+`FEMALE`, `ARM`, `TREATMENT`, `IS_CONTROL`, `N_SUBJECTS`, and `N_SAMPLES`.
+Requested arms absent from a particular FU/sex cell retain zero counts.
 
 ### `variable_summaries`
 
 Sex-stratified summaries of omics values and requested covariates, grouped by
-follow-up and treatment arm.
+follow-up and every observed treatment arm. Codes remain in list names
+(e.g., `omics_FU1_Tx2`), with labels supplied by report metadata.
 
 Example entries:
 
@@ -533,6 +608,10 @@ Contains:
 
 `outcome_summary` is computed after reducing the phenotype data to one row per
 subject, so repeated follow-up rows do not double-count the same outcome.
+
+For one active arm, `GROUP` retains `all`, `control`, and `treatment`. With
+multiple active arms, it uses `all`, `arm_0`, and `arm_<code>`, with `ARM` and
+`TREATMENT` columns carrying codes and labels (`NA` for the `all` row).
 
 Continuous outcome summary columns:
 
@@ -681,7 +760,9 @@ that computation, and the full DNAm report runtime has not been benchmarked here
 - Non-constant within-subject outcome, sex, or treatment stops the run.
 - Time-to-event validation warns that `OUTCOME_TIME` is assumed to be measured
   in years.
-- Analyte-level model failures are omitted from the final result tables, with
-  warnings.
-- Time-to-event follow-up/stratum combinations with zero events are skipped,
-  with warnings.
+- Analyte-level model errors emit warnings and retain an `outcome_effects` row
+  with `STATUS = "fit_error"` and `NA` inference.
+- Unavailable analyte inference, including zero-event survival cells, retains
+  `STATUS = "not_estimable"` rows. An entirely unavailable cell remains visible.
+- BH correction excludes unavailable p-values. DNAm filtered-set membership
+  remains independent of inference availability.

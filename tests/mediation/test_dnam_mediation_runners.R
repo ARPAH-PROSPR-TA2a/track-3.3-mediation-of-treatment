@@ -217,8 +217,9 @@ run_runner_tests <- function(outcome_name) {
 
   summary <- read.delim(file.path(successful$directory, "summary.tsv"),
                         stringsAsFactors = FALSE, check.names = FALSE)
-  columns <- c("ANALYSIS", "STRATUM", "FU", "METHYLATION_MONTH", "OUTCOME_MONTH",
-               "N_TESTED", "N_FILTERED", "P_LT_0_05", "BH_LT_0_05",
+  columns <- c("ANALYSIS", "STRATUM", "FU", "CONTRAST", "TREATMENT", "REFERENCE",
+               "METHYLATION_MONTH", "OUTCOME_MONTH", "N_REQUESTED",
+               "N_TESTED", "N_UNAVAILABLE", "N_FILTERED", "P_LT_0_05", "BH_LT_0_05",
                "FILTERED_BH_LT_0_05")
   expect_true(identical(names(summary), columns) && nrow(summary) == 12L,
               "Summary has the specified columns and all 12 analysis/stratum/FU rows")
@@ -250,6 +251,70 @@ run_runner_tests <- function(outcome_name) {
     }
   }
   cat("PASS Summary timing and significance counts match saved mediation effects\n")
+
+  # Actual runner integration with nonconsecutive arms and unavailable filtered
+  # probes, reusing one common outcome slope for both treatment contrasts.
+  labels <- c(`0` = "Control", `2` = "Diet", `7` = "Exercise")
+  multi_alpha <- do.call(rbind, lapply(c("2", "7"), function(arm) {
+    x <- alpha
+    x$CONTRAST <- paste0(arm, "_vs_0")
+    x$TREATMENT <- unname(labels[arm])
+    x$REFERENCE <- "Control"
+    x$STATUS <- "ok"
+    x$IN_FILTERED_SET <- x$ANALYTE_NAME %in% sprintf("cg%08d", c(1, 3))
+    x
+  }))
+  multi_beta <- beta
+  multi_beta$STATUS <- "ok"
+  multi_beta$IN_FILTERED_SET <- multi_beta$ANALYTE_NAME %in% sprintf("cg%08d", c(1, 3))
+  missing_alpha <- with(multi_alpha, FU == 1 & CONTRAST == "2_vs_0" & ANALYTE_NAME == "cg00000001")
+  multi_alpha[missing_alpha, c("EFFECT_SIZE", "SE", "P_VALUE", "BH_P_VALUE", "BH_P_VALUE_FILTERED")] <- NA_real_
+  multi_alpha$STATUS[missing_alpha] <- "fit_error"
+  missing_beta <- with(multi_beta, FU == 2 & ANALYTE_NAME == "cg00000003")
+  multi_beta[missing_beta, c("EFFECT_SIZE", "SE", "P_VALUE", "BH_P_VALUE", "BH_P_VALUE_FILTERED")] <- NA_real_
+  multi_beta$STATUS[missing_beta] <- "not_estimable"
+  multi_treatment <- make_results(multi_alpha, "treatment_effects")
+  multi_outcome <- make_results(multi_beta, "outcome_effects")
+  multi_treatment$metadata <- list(treatment_labels = labels)
+  multi_outcome$metadata <- list(analyte_slope = "common_across_treatment_arms", treatment_labels = labels)
+  multi <- launch("multiarm-unavailable", multi_treatment, multi_outcome)
+  if (multi$status != 0L) stop("FAIL: multi-arm runner\n", paste(multi$output, collapse = "\n"))
+  multi_summary <- read.delim(file.path(multi$directory, "summary.tsv"))
+  expect_true(nrow(multi_summary) == 24L &&
+                setequal(multi_summary$CONTRAST, c("2_vs_0", "7_vs_0")) &&
+                all(multi_summary$N_REQUESTED == 4L) &&
+                all(multi_summary$N_FILTERED == 2L) &&
+                sum(multi_summary$N_UNAVAILABLE) == 18L &&
+                all(multi_summary$N_TESTED + multi_summary$N_UNAVAILABLE == multi_summary$N_REQUESTED),
+              "Multi-arm runner separates contrasts and retains unavailable filtered members")
+  multi_results <- readRDS(file.path(multi$directory, result_name))
+  multi_provenance <- readRDS(file.path(multi$directory, "provenance.rds"))
+  expect_true(identical(multi_provenance$outcome_metadata, multi_outcome$metadata) &&
+                identical(multi_provenance$mediation_metadata$metadata,
+                          attr(multi_results, "metadata")),
+              "Runner provenance records the common analyte slope and mediation estimand")
+
+  # A contrast may be requested at only one follow-up. Summaries must describe
+  # observed combinations rather than filling the FU-by-contrast grid.
+  sparse_treatment <- multi_treatment
+  for (analysis in analyses) {
+    for (stratum in strata) {
+      effects <- sparse_treatment[[analysis]][[stratum]]$treatment_effects
+      sparse_treatment[[analysis]][[stratum]]$treatment_effects <-
+        effects[!(effects$FU == 2L & effects$CONTRAST == "7_vs_0"), ]
+    }
+  }
+  sparse <- launch("multiarm-sparse-followup", sparse_treatment, multi_outcome)
+  if (sparse$status != 0L) stop("FAIL: sparse multi-arm runner\n", paste(sparse$output, collapse = "\n"))
+  sparse_summary <- read.delim(file.path(sparse$directory, "summary.tsv"))
+  expected_sparse <- multi_summary[!(multi_summary$FU == 2L & multi_summary$CONTRAST == "7_vs_0"), ]
+  expect_true(nrow(sparse_summary) == 18L &&
+                !any(sparse_summary$FU == 2L & sparse_summary$CONTRAST == "7_vs_0") &&
+                all(sparse_summary$N_REQUESTED > 0L),
+              "Sparse follow-up summaries contain only observed contrast combinations")
+  expect_true(!anyNA(sparse_summary[c("TREATMENT", "REFERENCE")]) &&
+                isTRUE(all.equal(sparse_summary, expected_sparse, check.attributes = FALSE)),
+              "Sparse summaries preserve follow-up order, labels, counts and significance values")
 
   expect_rejection <- function(label, treatment_input = treatment, outcome_input = outcome,
                               preexisting = FALSE) {

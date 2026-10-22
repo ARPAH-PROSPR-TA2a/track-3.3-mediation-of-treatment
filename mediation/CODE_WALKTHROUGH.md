@@ -1,251 +1,153 @@
 # FAST Mediation Pipeline: Code Walkthrough
 
-This walkthrough documents the product-of-coefficients mediation pipeline in
-`mediation/`. The pipeline is much smaller than Track 1.1.1 or OutcomeWAS
-because it fits no models. It combines two sets of model results that have
-already been produced.
+Mediation combines fitted summary results; it does not refit either upstream
+model or read subject-level data. `FAST_mediation()` validates and routes
+analysis/stratum pairs. `.compute_mediation()` performs the calculation for one
+such pair.
 
-The central distinction is:
-
-- `FAST_mediation()` validates and routes analysis/stratum pairs.
-- `.compute_mediation()` performs the complete mediation calculation for one
-  analysis/stratum pair.
-
-## Table of Contents
-
-1. [Pipeline Mental Model](#pipeline-mental-model)
-2. [File Structure](#file-structure)
-3. [Orchestration](#orchestration)
-4. [Validation](#validation)
-5. [Mediation Computation](#mediation-computation)
-6. [Returned Result Object](#returned-result-object)
-
----
-
-## Pipeline Mental Model
-
-For a given analyte and follow-up:
-
-- Track 1.1.1 supplies `alpha`, the treatment-to-analyte coefficient.
-- OutcomeWAS supplies `beta`, the analyte-to-outcome coefficient conditional on
-  treatment and the other OutcomeWAS covariates.
-- Mediation calculates the indirect effect `alpha * beta`.
-
-The complete flow is:
-
-```text
-Track 1.1.1 result object                 OutcomeWAS result object
-          |                                        |
-          `------------- FAST_mediation() ----------'
-                              |
-                    validate and route pairs
-                              |
-              call .compute_mediation() for each shared
-                    analysis type and stratum
-                              |
-                    match alpha/beta rows
-                              |
-             calculate indirect effects + Sobel inference
-```
-
-> **Important:** This pipeline uses fitted summary results only. It does not
-> read subject-level phenotype or omics data, and it does not refit either
-> upstream model.
-
----
-
-## File Structure
-
-```text
-mediation/
-  main.R
-  R/
-    validation_helpers.R
-    analysis_helpers.R
-```
+## Files and Entry Point
 
 | File | Responsibility |
 |:---|:---|
-| `mediation/main.R` | Public entry point, input-level validation, analysis/stratum traversal, and result metadata |
-| `mediation/R/validation_helpers.R` | Definition and validation of the upstream result contract |
-| `mediation/R/analysis_helpers.R` | Row alignment, indirect-effect calculation, Sobel inference, and BH correction |
-
-`main.R` sources both helper files and exposes one public function:
-`FAST_mediation()`.
-
----
-
-## Orchestration
-
-File: `mediation/main.R`
+| `mediation/main.R` | Public API, normalization/validation, traversal, provenance |
+| `mediation/R/validation_helpers.R` | Upstream table and model contracts |
+| `mediation/R/analysis_helpers.R` | Row alignment, indirect effects, Sobel inference, BH |
 
 ```r
-FAST_mediation <- function(treatment_results,
-                           outcome_results,
-                           outcome_type = c("continuous", "tte"))
+FAST_mediation(
+  treatment_results,
+  outcome_results,
+  outcome_type = c("continuous", "tte")
+)
 ```
 
-The arguments are:
+Both inputs contain `analysis_change` and `analysis_level`. The supported
+strata are `all`, `male`, and `female`; each analysis must name at least one,
+but may omit the rest or hold `NULL` entries. The function traverses the union
+of supplied supported strata, calculates matching non-`NULL` pairs, and warns
+and returns `NULL` when a stratum is available in only one input.
 
-| Argument | Expected value |
+## Validate and Normalize Inputs
+
+The input tables are `$treatment_effects` from Track 1.1.1 and
+`$outcome_effects` from OutcomeWAS. Coefficient tables are not used.
+
+| Table | Unique identity within analysis/stratum |
 |:---|:---|
-| `treatment_results` | Result object returned by Track 1.1.1 `FAST_omics_WAS()` |
-| `outcome_results` | Result object returned by OutcomeWAS `FAST_outcome_WAS()` |
-| `outcome_type` | `"continuous"` or `"tte"`; determines outcome-table validation and TTE output |
+| Alpha | `ANALYTE_NAME × FU × CONTRAST` |
+| Beta | `ANALYTE_NAME × FU` |
 
-The function itself does little statistical work. Its job is to establish the
-correct pair of upstream entries for each call to `.compute_mediation()`.
+Codes and labels remain separate. Alpha `CONTRAST` identifies the active arm
+against control (`k_vs_0`), and `TREATMENT`/`REFERENCE` supply readable labels.
+Beta is the common analyte slope across categorical treatment arms. Outcome
+tables with an `ARM` column are incompatible and rejected.
 
-In execution order it:
+All tables require a nonempty analyte identifier, positive integer FU, numeric
+`EFFECT_SIZE` and `SE`, and a recognized availability state. An available row
+requires finite estimates and a strictly positive SE. Explicit `not_estimable`
+or `fit_error` rows require `NA` effect and SE. Invalid available values
+and duplicate keys stop the run.
 
-1. Resolves `outcome_type` with `match.arg()`.
-2. Validates the complete treatment result object.
-3. Validates the complete outcome result object against `outcome_type`.
-4. Creates output branches for `analysis_change` and `analysis_level`.
-5. Within each analysis, finds the union of supported stratum names supplied by
-   the two inputs.
-6. Calls `.compute_mediation()` when the same stratum is non-`NULL` in both
-   inputs.
-7. Warns and returns `NULL` for a stratum that is non-`NULL` in only one input.
-8. Attaches `outcome_type`, `method`, and `inference` metadata.
+Time-to-event beta tables must contain `HAZARD_RATIO`; continuous tables must
+not. This identifies the expected effect scale and catches an inconsistent
+`outcome_type` argument.
 
-Supported analysis types and strata are defined once in
-`validation_helpers.R`:
+Complete legacy binary inputs normalize missing contrast fields to `1_vs_0`
+and missing statuses to `ok`. They retain the existing requirement for finite
+effects and positive SEs. This fallback is not evidence that old output used a
+multi-arm model. Metadata is optional for compatibility. Updated outputs
+record `analyte_slope = "common_across_treatment_arms"`, and supplied treatment
+mappings validate codes and labels. Previous interaction-model outputs are
+rejected. Retain upstream provenance because table shape cannot establish
+which participants or treatment arms contributed to an old fit.
 
-```r
-.supported_analyses <- c("analysis_change", "analysis_level")
-.supported_strata <- c("all", "male", "female")
-```
+DNAm membership uses `IN_FILTERED_SET` independently of inference. Matched
+inputs must agree on membership. Legacy nonmissing-`BH_P_VALUE_FILTERED`
+membership is usable only when every row has available inference; ambiguous
+inputs require regeneration. Neither upstream p-values nor upstream adjusted
+p-values replace the new mediation tests.
 
-The important result of this orchestration is that `.compute_mediation()`
-always receives one treatment entry and one outcome entry for the same analysis
-type and stratum.
+## Align Alpha With the Intended Beta
 
----
+For each alpha row, preserve `ANALYTE_NAME`, `FU`, `CONTRAST`, `TREATMENT`,
+`REFERENCE`, its estimate/SE, and its status.
 
-## Validation
+Match `ANALYTE_NAME × FU`; several alpha contrasts use the same beta row
+without losing their identities. The treatment coefficients in the OutcomeWAS
+model are adjustment terms, not distinct beta paths.
 
-File: `mediation/R/validation_helpers.R`
+The output is based on alpha rows. A genuinely missing beta warns but retains
+the alpha row with `BETA_STATUS = "not_estimable"`; beta and indirect inference
+are `NA`. Explicit unavailable upstream rows are retained in the same way,
+while available component estimates remain visible. Zero overlap stops the
+pair rather than returning a wholly unmatched calculation.
 
-Validation runs before any analysis/stratum pair is calculated. It establishes
-the structural and numeric assumptions used by `.compute_mediation()`.
+`join_diagnostics` distinguishes alpha contrast counts from distinct beta-row
+counts. `matched_rows` counts matched alpha rows; `matched_outcome_rows` counts
+the distinct beta rows they use.
 
-### Result-Object Structure
+## Calculate the Product and Its Inference
 
-`.validate_results_object()` requires both `analysis_change` and
-`analysis_level`. Each analysis must name at least one member of the supported
-stratum set, but may omit the others. Unknown stratum names fail validation.
-
-Within a non-`NULL` stratum:
-
-- Track 1.1.1 must provide `treatment_effects`.
-- OutcomeWAS must provide `outcome_effects`.
-
-The broader upstream `coefficients` tables are not used by mediation.
-
-### Effect-Table Structure
-
-Both compact effect tables require:
-
-| Column | Validation |
-|:---|:---|
-| `ANALYTE_NAME` | Non-missing and non-empty |
-| `FU` | Positive integer |
-| `EFFECT_SIZE` | Finite numeric value |
-| `SE` | Finite numeric value greater than zero |
-
-`ANALYTE_NAME x FU` must be unique within each table. Duplicate keys are
-rejected rather than resolved implicitly during the join.
-
-For time-to-event outcomes, `outcome_effects` must contain `HAZARD_RATIO`. For
-continuous outcomes it must not contain that column. This makes an incorrect
-`outcome_type` argument fail early.
-
-After validation, the core calculation can assume that every path estimate has
-one key, one finite coefficient, and one positive standard error.
-
----
-
-## Mediation Computation
-
-File: `mediation/R/analysis_helpers.R`
-
-```r
-.compute_mediation <- function(treatment_entry,
-                               outcome_entry,
-                               analysis,
-                               stratum,
-                               outcome_type)
-```
-
-This function performs the full calculation for one analysis type and one
-stratum.
-
-### Prepare and Align the Inputs
-
-- Select `treatment_effects` and `outcome_effects`; the broader upstream
-  coefficient tables are never used.
-- Rename their estimates and SEs to `ALPHA_EFFECT`, `ALPHA_SE`, `BETA_EFFECT`,
-  and `BETA_SE`.
-- Match rows by `ANALYTE_NAME x FU` using an inner join.
-- Record matched and unmatched row counts in `join_diagnostics`.
-- Stop for zero overlap; warn and continue for partial overlap.
-- If `BH_P_VALUE_FILTERED` is present, require it in both inputs and require the
-  same matched rows to identify the filtered probe set. Only its non-`NA`
-  pattern is used; the upstream BH values are not reused.
-
-### Calculate the Indirect Effects
-
-For each matched row, let:
-
-- `a = ALPHA_EFFECT`;
-- `b = BETA_EFFECT`;
-- `SE(a) = ALPHA_SE`;
-- `SE(b) = BETA_SE`.
-
-The product-of-coefficients estimate is:
+For `k_vs_0`, let `a` be that treatment effect on the mediator and `b` the
+common analyte-to-outcome coefficient:
 
 ```text
 INDIRECT_EFFECT = a * b
-```
-
-The first-order Sobel standard error is:
-
-```text
 INDIRECT_SE = sqrt(b^2 * SE(a)^2 + a^2 * SE(b)^2)
-```
-
-The function then calculates:
-
-```text
 Z_VALUE = INDIRECT_EFFECT / INDIRECT_SE
 P_VALUE = 2 * pnorm(-abs(Z_VALUE))
-```
-
-Confidence intervals are fixed at 95%:
-
-```text
 CI_LOWER = INDIRECT_EFFECT - qnorm(0.975) * INDIRECT_SE
 CI_UPPER = INDIRECT_EFFECT + qnorm(0.975) * INDIRECT_SE
 ```
 
-The Sobel variance does not include covariance between `a` and `b`; that
-covariance is not available in the two upstream summary-result objects.
+The Sobel method and fixed 95% normal intervals are unchanged. For two exactly
+zero available estimates, the implementation defines `Z_VALUE = 0` and
+`P_VALUE = 1`. No significance screening of alpha or beta precedes these tests.
 
-If both estimated paths are exactly zero, both the numerator and denominator of
-the z statistic are zero. The implementation defines that singular case as
-`Z_VALUE = 0` and `P_VALUE = 1`.
+Calculations run only for available paths. Preserve `ALPHA_STATUS` and
+`BETA_STATUS`; overall `STATUS` is `fit_error` if either path has that state,
+otherwise `not_estimable` if either is unavailable, otherwise `ok`. Derived
+inference is `NA` for unavailable rows.
 
-### Correct and Return the Results
+### Estimand and Covariance
 
-- Apply BH correction to the mediation p-values within each `FU`. Because this
-  function handles one analysis/stratum pair, the complete grouping is
-  `analysis type x stratum x FU`.
-- For DNAm, separately correct within filtered probes and each `FU`; other
-  probes receive `NA` in `BH_P_VALUE_FILTERED`.
-- For TTE outcomes, add
-  `INDIRECT_HAZARD_RATIO = exp(INDIRECT_EFFECT)`.
-- Order rows by `ANALYTE_NAME` and `FU` and return:
+For continuous outcomes, `alpha_k * beta` gives the same pure and total natural
+indirect effect under the common-slope model. Interventions have separate alpha
+effects; beta is shared. The outcome model is unchanged from the binary case,
+with categorical treatment adjustment and no treatment-by-analyte or
+baseline-analyte interactions.
+
+This interpretation requires causal identification assumptions beyond treatment
+randomization: mediator/outcome timing, compatible populations and scales,
+correct models, and no unmeasured or treatment-induced mediator–outcome
+confounding.
+
+The existing Sobel expression omits covariance between alpha and beta.
+Indirect effects for different arms are correlated through their common beta,
+joint alpha model, and shared controls. Comparing them requires
+cross-contrast covariance not exported by these tables.
+
+For Cox outcomes, `INDIRECT_HAZARD_RATIO = exp(INDIRECT_EFFECT)` is retained for
+compatibility. It is an approximation, not a general causal indirect hazard
+ratio; the product interpretation needs additional conditions such as rare
+events, proportional hazards, and a justified post-mediator risk window.
+OutcomeWAS does not construct that window or implement landmarking.
+
+## Apply Multiple-Testing Correction
+
+Within each analysis/stratum pair:
+
+- Apply BH to available mediation p-values within `FU × CONTRAST`.
+- For DNAm, repeat within `IN_FILTERED_SET` members in each `FU × CONTRAST`.
+  Nonmembers and unavailable inference receive `NA` filtered p-values.
+- Preserve all alpha identities and readable labels in the result.
+
+These are separate contrast-specific families, not a combined FDR guarantee
+across interventions.
+
+## Returned Object
+
+Each calculated stratum returns:
 
 ```r
 list(
@@ -254,43 +156,19 @@ list(
 )
 ```
 
----
+`mediation_effects` includes:
 
-## Returned Result Object
+- `ANALYTE_NAME`, `FU`, `CONTRAST`, `TREATMENT`, `REFERENCE`;
+- `ALPHA_EFFECT`, `ALPHA_SE`, `ALPHA_STATUS`;
+- `BETA_EFFECT`, `BETA_SE`, `BETA_STATUS`, overall `STATUS`;
+- `INDIRECT_EFFECT`, `INDIRECT_SE`, `Z_VALUE`, `P_VALUE`, `CI_LOWER`, `CI_UPPER`,
+  `BH_P_VALUE`;
+- `IN_FILTERED_SET` and `BH_P_VALUE_FILTERED` for DNAm;
+- `INDIRECT_HAZARD_RATIO` for time-to-event outcomes.
 
-For inputs containing all three strata, the result is accessed as:
-
-```r
-results$analysis_change$all
-results$analysis_change$male
-results$analysis_change$female
-
-results$analysis_level$all
-results$analysis_level$male
-results$analysis_level$female
-```
-
-Only strata named by at least one input appear. A stratum unavailable in one of
-the two inputs is present as `NULL` after its warning.
-
-Each calculated stratum contains `mediation_effects` and `join_diagnostics`.
-`mediation_effects` retains the four component values used in the calculation:
-
-- `ANALYTE_NAME`, `FU`
-- `ALPHA_EFFECT`, `ALPHA_SE`
-- `BETA_EFFECT`, `BETA_SE`
-
-The remaining columns are computed by this pipeline:
-
-- `INDIRECT_EFFECT`, `INDIRECT_SE`
-- `Z_VALUE`, `P_VALUE`, `CI_LOWER`, `CI_UPPER`, `BH_P_VALUE`
-- `BH_P_VALUE_FILTERED` when filtered DNAm inputs are supplied
-- `INDIRECT_HAZARD_RATIO` for time-to-event outcomes
-
-The complete object has:
-
-```r
-attr(results, "outcome_type")  # "continuous" or "tte"
-attr(results, "method")        # "product_of_coefficients"
-attr(results, "inference")     # "sobel"
-```
+The complete object retains attributes `outcome_type`,
+`method = "product_of_coefficients"`, and `inference = "sobel"`, with
+`attr(results, "metadata")` describing the common analyte slope, treatment mapping,
+estimand, effect scale, BH family, and omitted covariance. See
+[INPUTS_OUTPUTS.md](INPUTS_OUTPUTS.md) for the public contract and
+[Examples/README.md](Examples/README.md) for runnable examples.

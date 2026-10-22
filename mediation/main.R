@@ -6,12 +6,25 @@ FAST_mediation <- function(treatment_results,
                            outcome_results,
                            outcome_type = c("continuous", "tte")) {
   outcome_type <- match.arg(outcome_type)
-  .validate_results_object(treatment_results, role = "treatment")
-  .validate_results_object(
+  treatment_results <- .validate_results_object(treatment_results, role = "treatment")
+  outcome_results <- .validate_results_object(
     outcome_results,
     role = "outcome",
     outcome_type = outcome_type
   )
+
+  outcome_labels <- .mediation_metadata_labels(outcome_results, "outcome")
+  treatment_labels <- .mediation_metadata_labels(treatment_results, "treatment")
+  treatment_map <- attr(treatment_results, "treatment_map")
+  if (!is.null(outcome_labels)) {
+    requested <- if (!is.null(treatment_labels)) names(treatment_labels) else c("0", treatment_map$ARM)
+    if (any(!requested %in% names(outcome_labels))) {
+      stop("Outcome treatment metadata does not include every requested alpha arm and control.")
+    }
+    if (!is.null(treatment_labels) && !setequal(names(treatment_labels), names(outcome_labels))) {
+      stop("Alpha and beta treatment metadata describe different arm sets.")
+    }
+  }
 
   output <- setNames(vector("list", length(.supported_analyses)), .supported_analyses)
 
@@ -45,7 +58,8 @@ FAST_mediation <- function(treatment_results,
         outcome_entry = outcome_entry,
         analysis = analysis,
         stratum = stratum,
-        outcome_type = outcome_type
+        outcome_type = outcome_type,
+        outcome_labels = outcome_labels
       )
     }
   }
@@ -53,5 +67,22 @@ FAST_mediation <- function(treatment_results,
   attr(output, "outcome_type") <- outcome_type
   attr(output, "method") <- "product_of_coefficients"
   attr(output, "inference") <- "sobel"
+  if (is.null(treatment_labels) && !is.null(treatment_map)) {
+    treatment_labels <- c(`0` = treatment_map$REFERENCE[1L],
+                          setNames(treatment_map$TREATMENT, treatment_map$ARM))
+  }
+  attr(output, "metadata") <- list(
+    schema_version = "2.0", analyte_slope = "common_across_treatment_arms",
+    treatment_labels = treatment_labels, treatments = treatment_map,
+    estimand = if (outcome_type == "tte") "cox_product_of_coefficients_approximation" else {
+      "pure_and_total_natural_indirect_effect_under_shared_beta"
+    },
+    effect_scale = if (outcome_type == "tte") "log_hazard" else "outcome",
+    bh_family = "BH within analysis, stratum, FU and contrast",
+    alpha_beta_covariance = "not_included", cross_contrast_covariance = "not_available",
+    survival_interpretation = if (outcome_type == "tte") {
+      "exp(product) is a Cox product approximation, not a general causal indirect hazard ratio"
+    } else NULL
+  )
   output
 }
