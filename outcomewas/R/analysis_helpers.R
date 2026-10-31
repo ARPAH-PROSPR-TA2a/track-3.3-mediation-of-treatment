@@ -889,5 +889,17 @@
     outputs <- .add_filtered_bh_correction(outputs, filtered_probes)
   }
 
+  # Labels never enter model fitting, BH families, or checkpoint payloads.
+  if (!is.null(pheno_list$fu_labels)) {
+    for (dataset in names(outputs)) {
+      if (is.null(outputs[[dataset]])) next
+      for (table in c("coefficients", "outcome_effects")) {
+        outputs[[dataset]][[table]] <- .attach_outcome_fu_labels(
+          outputs[[dataset]][[table]], pheno_list$fu_labels
+        )
+      }
+    }
+  }
+
   outputs
 }

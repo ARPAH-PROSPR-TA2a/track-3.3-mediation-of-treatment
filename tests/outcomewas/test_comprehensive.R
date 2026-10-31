@@ -44,11 +44,17 @@ print_results_summary <- function(results, label = "") {
     cat("  Analytes:          ", length(unique(coefs$ANALYTE_NAME)), "\n")
     cat("  FU levels:         ", paste(sort(unique(coefs$FU)), collapse = ", "), "\n")
     cat("  Columns:           ", paste(colnames(coefs), collapse = ", "), "\n")
+    if ("FU_LABEL" %in% names(coefs)) {
+      cat("  FU labels:         ", paste(unique(paste0(coefs$FU, " = ", coefs$FU_LABEL)), collapse = ", "), "\n")
+    }
   }
   if (!is.null(results$outcome_effects)) {
     oe <- results$outcome_effects
     cat("  Outcome effects:   ", nrow(oe), " rows\n")
     cat("  FU levels:         ", paste(sort(unique(oe$FU)), collapse = ", "), "\n")
+    if ("FU_LABEL" %in% names(oe)) {
+      cat("  FU labels:         ", paste(unique(paste0(oe$FU, " = ", oe$FU_LABEL)), collapse = ", "), "\n")
+    }
   }
 }
 
@@ -314,6 +320,10 @@ multi_fu_levels <- sort(unique(as.integer(as.character(pheno_multi_fu$FU))))
 multi_fu_levels <- multi_fu_levels[multi_fu_levels != 0]
 
 additional_covariates <- c("agebl", "agevis", "ethnic", "race3", "mbmi")
+fu_labels_single <- c(`0` = "Baseline", `1` = "12mo")
+fu_labels_multi <- c(`0` = "Baseline", `1` = "12mo", `2` = "24mo")
+# Reuse these fits for label-only checkpoint comparisons below.
+label_checkpoints <- tempfile("outcomewas_comprehensive_labels_")
 
 cat("Data prepared\n")
 cat("  Single-FU subjects: ", length(unique(pheno_single_fu$SUBJECT_ID)), "\n")
@@ -337,13 +347,16 @@ results_test1 <- FAST_outcome_WAS(
   omics = omics_non_dnam,
   omics_type = "Proteomics",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_single,
+  checkpoint_dir = file.path(label_checkpoints, "1")
 )
 reports_test1 <- FAST_outcome_WAS_reports(
   pheno = pheno_single_continuous,
   omics = omics_non_dnam,
   omics_type = "Proteomics",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_single
 )
 
 cat("Top-Level Structure Checks\n")
@@ -389,13 +402,16 @@ results_test2 <- FAST_outcome_WAS(
   omics = omics_non_dnam,
   omics_type = "Proteomics",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_single,
+  checkpoint_dir = file.path(label_checkpoints, "2")
 )
 reports_test2 <- FAST_outcome_WAS_reports(
   pheno = pheno_single_tte,
   omics = omics_non_dnam,
   omics_type = "Proteomics",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_single
 )
 
 cat("Top-Level Structure Checks\n")
@@ -441,13 +457,16 @@ results_test3 <- FAST_outcome_WAS(
   omics = omics_non_dnam,
   omics_type = "Proteomics",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_multi,
+  checkpoint_dir = file.path(label_checkpoints, "3")
 )
 reports_test3 <- FAST_outcome_WAS_reports(
   pheno = pheno_multi_continuous,
   omics = omics_non_dnam,
   omics_type = "Proteomics",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_multi
 )
 
 cat("Top-Level Structure Checks\n")
@@ -493,13 +512,16 @@ results_test4 <- FAST_outcome_WAS(
   omics = omics_non_dnam,
   omics_type = "Proteomics",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_multi,
+  checkpoint_dir = file.path(label_checkpoints, "4")
 )
 reports_test4 <- FAST_outcome_WAS_reports(
   pheno = pheno_multi_tte,
   omics = omics_non_dnam,
   omics_type = "Proteomics",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_multi
 )
 
 cat("Top-Level Structure Checks\n")
@@ -545,17 +567,23 @@ results_test5 <- FAST_outcome_WAS(
   omics = omics_dnam,
   omics_type = "DNAm",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_multi,
+  checkpoint_dir = file.path(label_checkpoints, "5")
 )
 reports_test5 <- FAST_outcome_WAS_reports(
   pheno = pheno_multi_continuous,
   omics = omics_dnam,
   omics_type = "DNAm",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_multi
 )
 
 cat("Top-Level Structure Checks\n")
 test5_top_pass <- run_checks(check_top_level_structure(results_test5))
+cat("\n")
+print_results_summary(results_test5$analysis_change$all, "Change Results")
+print_results_summary(results_test5$analysis_level$all, "Level Results")
 cat("\n")
 
 cat("Change Structural Checks\n")
@@ -593,17 +621,23 @@ results_test6 <- FAST_outcome_WAS(
   omics = omics_dnam,
   omics_type = "DNAm",
   additional_covariates = additional_covariates,
-  n_cores = 1
+  n_cores = 1,
+  fu_labels = fu_labels_multi,
+  checkpoint_dir = file.path(label_checkpoints, "6")
 )
 reports_test6 <- FAST_outcome_WAS_reports(
   pheno = pheno_multi_tte,
   omics = omics_dnam,
   omics_type = "DNAm",
-  additional_covariates = additional_covariates
+  additional_covariates = additional_covariates,
+  fu_labels = fu_labels_multi
 )
 
 cat("Top-Level Structure Checks\n")
 test6_top_pass <- run_checks(check_top_level_structure(results_test6))
+cat("\n")
+print_results_summary(results_test6$analysis_change$all, "Change Results")
+print_results_summary(results_test6$analysis_level$all, "Level Results")
 cat("\n")
 
 cat("Change Structural Checks\n")
@@ -630,6 +664,130 @@ test6_pass <- test6_top_pass && test6_change_struct_pass && test6_level_struct_p
   test6_reports_pass && test6_change_oe_pass && test6_level_oe_pass
 
 # =============================================================================
+# FOLLOW-UP LABELS: retain labeled primary examples and compare legacy outputs
+# =============================================================================
+
+cat("Follow-up Labels\n")
+test_labels_pass <- local({
+  labeled_results <- list(results_test1, results_test2, results_test3,
+                          results_test4, results_test5, results_test6)
+  labeled_reports <- list(reports_test1, reports_test2, reports_test3,
+                          reports_test4, reports_test5, reports_test6)
+  inputs <- list(pheno_single_continuous, pheno_single_tte, pheno_multi_continuous,
+                 pheno_multi_tte, pheno_multi_continuous, pheno_multi_tte)
+  checks <- list()
+  quiet <- function(expr) suppressWarnings(suppressMessages(expr))
+  for (i in seq_along(labeled_results)) {
+    input <- inputs[[i]]
+    omics_input <- if (i <= 4L) omics_non_dnam else omics_dnam
+    type <- if (i <= 4L) "Proteomics" else "DNAm"
+    visits <- if (i <= 2L) fu_labels_single else fu_labels_multi
+    checkpoint <- file.path(label_checkpoints, as.character(i))
+    batches <- list.files(checkpoint, recursive = TRUE, full.names = TRUE)
+    checksums <- tools::md5sum(batches)
+    labeled <- labeled_results[[i]]
+    unlabeled <- quiet(FAST_outcome_WAS(input, omics_input, omics_type = type,
+      additional_covariates = additional_covariates, n_cores = 1L,
+      checkpoint_dir = checkpoint))
+    reordered <- quiet(FAST_outcome_WAS(input, omics_input, omics_type = type,
+      additional_covariates = additional_covariates, n_cores = 1L,
+      fu_labels = rev(visits), checkpoint_dir = checkpoint))
+    prefix <- paste("Test", i, "labels:")
+    checks[[paste(prefix, "metadata and map order")]] <-
+      identical(labeled$metadata$fu_labels, visits) && is.null(unlabeled$metadata$fu_labels) &&
+      identical(reordered, labeled)
+    checks[[paste(prefix, "checkpoint payloads unchanged")]] <-
+      length(batches) > 0L && identical(checksums, tools::md5sum(batches))
+
+    # Only display columns/metadata may change: coefficient names, numerical
+    # inference, full/filtered BH, hazard ratios, and unavailable statuses stay.
+    normalized <- labeled
+    normalized$metadata$fu_labels <- NULL
+    for (analysis in c("analysis_change", "analysis_level")) {
+      for (stratum in c("all", "male", "female")) {
+        for (slot in c("coefficients", "outcome_effects")) {
+          table <- labeled[[analysis]][[stratum]][[slot]]
+          checks[[paste(prefix, analysis, stratum, slot, "visit labels")]] <-
+            identical(table$FU_LABEL, unname(visits[as.character(table$FU)])) &&
+            identical(names(table)[2:3], c("FU", "FU_LABEL"))
+          normalized[[analysis]][[stratum]][[slot]]$FU_LABEL <- NULL
+        }
+      }
+    }
+    checks[[paste(prefix, "all inference and coefficient names unchanged")]] <-
+      identical(normalized, unlabeled)
+
+    normalized_report <- labeled_reports[[i]]
+    unlabeled_report <- quiet(FAST_outcome_WAS_reports(input, omics_input, omics_type = type,
+      additional_covariates = additional_covariates))
+    checks[[paste(prefix, "report metadata")]] <- identical(normalized_report$metadata$fu_labels, visits)
+    for (slot in c("pheno_summary", "arm_counts")) {
+      table <- normalized_report[[slot]]
+      checks[[paste(prefix, slot)]] <-
+        identical(names(table)[1:2], c("FU", "FU_LABEL")) &&
+        identical(table$FU_LABEL, unname(visits[as.character(table$FU)]))
+      normalized_report[[slot]]$FU_LABEL <- NULL
+    }
+    table <- normalized_report$outcome_reports$analysis_sample_summary
+    checks[[paste(prefix, "analysis sample labels")]] <-
+      identical(names(table)[1:2], c("FU", "FU_LABEL")) &&
+      identical(table$FU_LABEL, unname(visits[as.character(table$FU)]))
+    normalized_report$outcome_reports$analysis_sample_summary$FU_LABEL <- NULL
+    normalized_report$metadata$fu_labels <- NULL
+    checks[[paste(prefix, "report values and keys unchanged")]] <- identical(normalized_report, unlabeled_report)
+
+    if (i == 3L) {
+      fresh <- quiet(FAST_outcome_WAS(input, omics_input, omics_type = type,
+        additional_covariates = additional_covariates, n_cores = 1L))
+      checks[["Independent unlabeled fit preserves numerical results"]] <-
+        isTRUE(all.equal(fresh, unlabeled, tolerance = 1e-8))
+      revised <- visits
+      revised["2"] <- "Month 24 (final)"
+      updated <- quiet(FAST_outcome_WAS(input, omics_input, omics_type = type,
+        additional_covariates = additional_covariates, n_cores = 1L,
+        fu_labels = revised, checkpoint_dir = checkpoint))
+      checks[["Changed labels reuse cached fits"]] <-
+        identical(checksums, tools::md5sum(batches)) &&
+        identical(updated$metadata$fu_labels, revised) &&
+        all(updated$analysis_change$all$outcome_effects$FU_LABEL[
+          updated$analysis_change$all$outcome_effects$FU == 2L] == "Month 24 (final)")
+
+      source(file.path("outcomewas", "R", "plotting_helpers.R"), local = TRUE)
+      checks[["Plot titles use labels and retain legacy fallback"]] <-
+        grepl("24mo", plot_volcano(labeled, fu = 2)$labels$title, fixed = TRUE) &&
+        grepl("FU=2", plot_volcano(unlabeled, fu = 2)$labels$title, fixed = TRUE) &&
+        identical(plot_volcano(labeled, fu = 2, title = "Custom")$labels$title, "Custom")
+      empty <- labeled
+      empty$analysis_change$all$outcome_effects$IN_FILTERED_SET <- FALSE
+      checks[["Empty filtered plots retain the visit label"]] <-
+        grepl("24mo", plot_volcano(empty, fu = 2, probe_set = "filtered")$labels$title, fixed = TRUE)
+      received_title <- NULL
+      qq <- function(pvector, main, ...) received_title <<- main
+      plot_qq(labeled, fu = 2)
+      checks[["QQ title uses the visit label"]] <- grepl("24mo", received_title, fixed = TRUE)
+    }
+  }
+
+  labels <- fu_labels_multi
+  invalid_maps <- list(
+    unnamed = unname(labels), missing_baseline = labels[-1], extra_code = c(labels, `3` = "36mo"),
+    duplicate_code = setNames(unname(labels), c("0", "1", "1")),
+    duplicate_label = c(`0` = "Baseline", `1` = "12mo", `2` = "12mo"),
+    blank = c(`0` = "Baseline", `1` = "12mo", `2` = " "),
+    missing = c(`0` = "Baseline", `1` = "12mo", `2` = NA_character_)
+  )
+  for (name in names(invalid_maps)) {
+    error <- tryCatch({
+      quiet(.validate_pheno(pheno_multi_continuous, fu_labels = invalid_maps[[name]])); NULL
+    }, error = identity)
+    checks[[paste("Reject invalid follow-up map:", name)]] <-
+      inherits(error, "error") && grepl("fu_labels", conditionMessage(error))
+  }
+  run_checks(checks)
+})
+unlink(label_checkpoints, recursive = TRUE)
+
+# =============================================================================
 # SUMMARY
 # =============================================================================
 
@@ -643,9 +801,10 @@ cat("Test 3 (Multi-FU continuous + non-DNAm):  ", if (test3_pass) "PASS" else "F
 cat("Test 4 (Multi-FU TTE + non-DNAm):         ", if (test4_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 5 (Multi-FU continuous + DNAm):      ", if (test5_pass) "PASS" else "FAIL", "\n", sep = "")
 cat("Test 6 (Multi-FU TTE + DNAm):             ", if (test6_pass) "PASS" else "FAIL", "\n", sep = "")
+cat("Follow-up labels:                        ", if (test_labels_pass) "PASS" else "FAIL", "\n", sep = "")
 
 all_tests_pass <- all(omics_type_validation_pass, test1_pass, test2_pass,
-                      test3_pass, test4_pass, test5_pass, test6_pass)
+                      test3_pass, test4_pass, test5_pass, test6_pass, test_labels_pass)
 cat("\nOverall: ", if (all_tests_pass) "ALL TESTS PASSED" else "SOME TESTS FAILED", "\n", sep = "")
 
 if (!all_tests_pass) {

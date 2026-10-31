@@ -47,7 +47,7 @@
     "survival::Surv(OUTCOME_TIME, OUTCOME_STATUS)"
   }
   predictors <- "analyte + analyte_baseline + TREATMENT_GROUP"
-  list(
+  metadata <- list(
     schema_version = "2.0",
     treatment_labels = pheno_list$treatment_labels,
     treatments = pheno_list$treatments,
@@ -68,4 +68,6 @@
       "Common Cox baseline hazard across treatment arms"
     }
   )
+  if (!is.null(pheno_list$fu_labels)) metadata$fu_labels <- pheno_list$fu_labels
+  metadata
 }

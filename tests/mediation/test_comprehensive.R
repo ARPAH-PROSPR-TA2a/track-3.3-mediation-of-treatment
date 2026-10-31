@@ -29,7 +29,7 @@ expect_error <- function(expression, pattern, label) {
 }
 
 
-expect_warning <- function(expression, pattern, label) {
+expect_warnings <- function(expression, pattern = NULL, label, count = NULL) {
   messages <- character()
   value <- withCallingHandlers(
     expression,
@@ -38,7 +38,8 @@ expect_warning <- function(expression, pattern, label) {
       invokeRestart("muffleWarning")
     }
   )
-  expect_true(any(grepl(pattern, messages)), label)
+  matched <- if (is.null(pattern)) !length(messages) else any(grepl(pattern, messages))
+  expect_true(matched && (is.null(count) || length(messages) == count), label)
   value
 }
 
@@ -74,13 +75,20 @@ make_effects <- function(outcome_type = "continuous", filtered = FALSE) {
 }
 
 
-make_results <- function(entry, sex_strata = TRUE) {
+make_results <- function(entry, sex_strata = TRUE, fu_labels = NULL) {
+  if (!is.null(fu_labels)) {
+    for (table in intersect(c("treatment_effects", "outcome_effects"), names(entry))) {
+      entry[[table]]$FU_LABEL <- unname(fu_labels[as.character(entry[[table]]$FU)])
+    }
+  }
   branch <- list(
     all = entry,
     male = if (sex_strata) entry else NULL,
     female = if (sex_strata) entry else NULL
   )
-  list(analysis_change = branch, analysis_level = branch)
+  results <- list(analysis_change = branch, analysis_level = branch)
+  if (!is.null(fu_labels)) results$metadata <- list(fu_labels = fu_labels)
+  results
 }
 
 
@@ -93,10 +101,15 @@ make_all_only_results <- function(entry) {
 cat("Mediation comprehensive tests\n\n")
 
 fixture <- make_effects()
-treatment_results <- make_results(fixture$treatment)
-outcome_results <- make_results(fixture$outcome)
-results <- FAST_mediation(treatment_results, outcome_results, "continuous")
+fu_labels <- c(`0` = "Baseline", `1` = "12mo", `2` = "24mo")
+treatment_results <- make_results(fixture$treatment, fu_labels = fu_labels)
+outcome_results <- make_results(fixture$outcome, fu_labels = fu_labels)
+results <- expect_warnings(
+  FAST_mediation(treatment_results, outcome_results, "continuous"),
+  label = "Matching follow-up labels proceed without warnings"
+)
 effects <- results$analysis_change$all$mediation_effects
+print(unique(effects[c("FU", "FU_LABEL")]))
 row_a <- effects[effects$ANALYTE_NAME == "A" & effects$FU == 1L, ]
 
 expected_effect <- 0.5 * 0.4
@@ -151,8 +164,8 @@ expect_equal(row_d$P_VALUE, 1, "Singular zero-path p-value")
 
 filtered_fixture <- make_effects(filtered = TRUE)
 filtered_results <- FAST_mediation(
-  make_results(filtered_fixture$treatment, sex_strata = FALSE),
-  make_results(filtered_fixture$outcome, sex_strata = FALSE),
+  make_results(filtered_fixture$treatment, sex_strata = FALSE, fu_labels = fu_labels),
+  make_results(filtered_fixture$outcome, sex_strata = FALSE, fu_labels = fu_labels),
   "continuous"
 )
 filtered_effects <- filtered_results$analysis_change$all$mediation_effects
@@ -164,8 +177,8 @@ expect_true(all(is.na(filtered_effects$BH_P_VALUE_FILTERED[filtered_effects$ANAL
 
 tte_fixture <- make_effects(outcome_type = "tte")
 tte_results <- FAST_mediation(
-  make_results(tte_fixture$treatment, sex_strata = FALSE),
-  make_results(tte_fixture$outcome, sex_strata = FALSE),
+  make_results(tte_fixture$treatment, sex_strata = FALSE, fu_labels = fu_labels),
+  make_results(tte_fixture$outcome, sex_strata = FALSE, fu_labels = fu_labels),
   "tte"
 )
 tte_effects <- tte_results$analysis_change$all$mediation_effects
@@ -175,7 +188,7 @@ expect_equal(tte_effects$INDIRECT_HAZARD_RATIO, exp(tte_effects$INDIRECT_EFFECT)
 partial_outcome <- make_results(fixture$outcome, sex_strata = FALSE)
 partial_outcome$analysis_change$all$outcome_effects <-
   partial_outcome$analysis_change$all$outcome_effects[-1, ]
-partial <- expect_warning(
+partial <- expect_warnings(
   FAST_mediation(
     make_results(fixture$treatment, sex_strata = FALSE),
     partial_outcome,
@@ -221,7 +234,7 @@ expect_error(
 stratum_mismatch_treatment <- make_results(fixture$treatment, sex_strata = TRUE)
 stratum_mismatch_outcome <- make_results(fixture$outcome, sex_strata = TRUE)
 stratum_mismatch_outcome$analysis_change["male"] <- list(NULL)
-stratum_result <- expect_warning(
+stratum_result <- expect_warnings(
   FAST_mediation(
     stratum_mismatch_treatment,
     stratum_mismatch_outcome,
@@ -243,5 +256,122 @@ expect_error(
   "unsupported strata",
   "Unknown stratum names fail validation"
 )
+
+# Follow-up label rules preserve numeric matching and inference.
+strip_fu_labels <- function(result) {
+  attr(result, "metadata")$fu_labels <- NULL
+  for (analysis in c("analysis_change", "analysis_level")) {
+    for (stratum in names(result[[analysis]])) {
+      if (is.null(result[[analysis]][[stratum]])) next
+      result[[analysis]][[stratum]]$mediation_effects$FU_LABEL <- NULL
+    }
+  }
+  result
+}
+cases <- list(
+  continuous = list(fixture = fixture, labeled = results, strata = TRUE, type = "continuous"),
+  filtered = list(fixture = filtered_fixture, labeled = filtered_results, strata = FALSE, type = "continuous"),
+  tte = list(fixture = tte_fixture, labeled = tte_results, strata = FALSE, type = "tte")
+)
+for (name in names(cases)) {
+  case <- cases[[name]]
+  legacy <- expect_warnings(
+    FAST_mediation(make_results(case$fixture$treatment, case$strata),
+                   make_results(case$fixture$outcome, case$strata), case$type),
+    label = paste(name, "unlabeled inputs proceed without warnings")
+  )
+  expect_true(identical(strip_fu_labels(case$labeled), legacy),
+              paste(name, "labels preserve every numeric column, status, BH value, and join diagnostic"))
+  expect_true(is.null(attr(legacy, "metadata")$fu_labels) &&
+                !"FU_LABEL" %in% names(legacy$analysis_change$all$mediation_effects),
+              paste(name, "legacy inputs retain their output structure"))
+  expect_true(identical(attr(case$labeled, "metadata")$fu_labels, fu_labels),
+              paste(name, "metadata preserves the full visit map including baseline"))
+  for (analysis in c("analysis_change", "analysis_level")) {
+    for (stratum in names(case$labeled[[analysis]])) {
+      table <- case$labeled[[analysis]][[stratum]]$mediation_effects
+      if (is.null(table)) next
+      expect_true(identical(names(table)[1:3], c("ANALYTE_NAME", "FU", "FU_LABEL")) &&
+                    identical(table$FU_LABEL, unname(fu_labels[as.character(table$FU)])),
+                  paste(name, analysis, stratum, "retains visit labels beside numeric FU"))
+    }
+  }
+}
+
+# A single labeled source is enough. Row-only sources need no baseline metadata.
+alpha_only <- expect_warnings(
+  FAST_mediation(treatment_results, make_results(fixture$outcome)),
+  "only by alpha.*Label agreement could not be checked",
+  "Alpha-only labels emit one warning across all analyses and strata", count = 1L
+)
+beta_only <- expect_warnings(
+  FAST_mediation(make_results(fixture$treatment), outcome_results),
+  "only by beta.*Label agreement could not be checked",
+  "Beta-only labels emit one warning across all analyses and strata", count = 1L
+)
+expect_true(identical(alpha_only, results) && identical(beta_only, results),
+            "Either labeled source supplies the full display mapping")
+rows_only <- treatment_results
+rows_only$metadata <- NULL
+row_result <- expect_warnings(
+  FAST_mediation(rows_only, make_results(fixture$outcome)),
+  "only by alpha.*Label agreement could not be checked",
+  "Row-only labels emit one inheritance warning", count = 1L
+)
+expect_true(identical(attr(row_result, "metadata")$fu_labels, fu_labels[-1]) &&
+              identical(row_result$analysis_change$all$mediation_effects, effects),
+            "FU_LABEL columns supply a mapping without baseline metadata")
+metadata_only <- outcome_results
+for (analysis in c("analysis_change", "analysis_level")) {
+  for (stratum in c("all", "male", "female")) {
+    metadata_only[[analysis]][[stratum]]$outcome_effects$FU_LABEL <- NULL
+  }
+}
+metadata_result <- expect_warnings(
+  FAST_mediation(make_results(fixture$treatment), metadata_only),
+  "only by beta.*Label agreement could not be checked",
+  "Metadata-only labels emit one inheritance warning", count = 1L
+)
+expect_true(identical(metadata_result, results),
+            "Metadata supplies labels without repeated table columns")
+
+conflicting <- outcome_results
+conflicting$metadata$fu_labels["1"] <- "24mo"
+expect_error(FAST_mediation(treatment_results, conflicting), "FU_LABEL disagrees with metadata",
+              "A source's table labels must agree with its metadata")
+conflicting <- make_results(fixture$outcome, fu_labels = c(`0` = "Baseline", `1` = "Month 12", `2` = "24mo"))
+expect_error(FAST_mediation(treatment_results, conflicting), "Follow-up labels disagree",
+              "Conflicting follow-up labels stop mediation even when numeric codes match")
+conflicting <- outcome_results
+conflicting$metadata$fu_labels["0"] <- "Pre-intervention"
+expect_error(FAST_mediation(treatment_results, conflicting), "Follow-up labels disagree.*0",
+              "Shared baseline metadata labels must agree")
+conflicting <- rows_only
+conflicting$analysis_level$male$treatment_effects$FU_LABEL[1] <- "Different"
+expect_error(FAST_mediation(conflicting, outcome_results), "consistently across analyses and strata",
+              "Rows must map each code consistently across the source")
+incomplete <- outcome_results
+incomplete$metadata$fu_labels <- fu_labels[1:2]
+expect_error(FAST_mediation(treatment_results, incomplete), "cover every observed FU",
+              "An explicit source map must cover its observed effect-table visits")
+invalid <- outcome_results
+invalid$metadata$fu_labels <- setNames(unname(fu_labels), c("0", "1", "1"))
+expect_error(FAST_mediation(treatment_results, invalid), "unique non-negative integer FU codes",
+              "Duplicate visit-map keys fail validation")
+
+# Labels must not remove an otherwise valid legacy partial-join result.
+fu1_beta <- fixture$outcome
+fu1_beta$outcome_effects <- fu1_beta$outcome_effects[fu1_beta$outcome_effects$FU == 1L, ]
+partial_labeled <- expect_warnings(FAST_mediation(
+  make_results(fixture$treatment, FALSE), make_results(fu1_beta, FALSE, fu_labels[1:2])
+), "Partial mediation join", "Partially known labels preserve partial joins")
+partial_legacy <- suppressWarnings(FAST_mediation(
+  make_results(fixture$treatment, FALSE), make_results(fu1_beta, FALSE)
+))
+partial_table <- partial_labeled$analysis_change$all$mediation_effects
+expect_true(identical(strip_fu_labels(partial_labeled), partial_legacy) &&
+              all(partial_table$FU_LABEL[partial_table$FU == 1L] == "12mo") &&
+              all(is.na(partial_table$FU_LABEL[partial_table$FU == 2L])),
+            "Unknown legacy visit labels remain NA without changing status or inference")
 
 cat("\nAll mediation comprehensive tests passed.\n")

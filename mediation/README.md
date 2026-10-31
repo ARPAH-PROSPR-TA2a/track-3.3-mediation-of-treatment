@@ -46,11 +46,24 @@ availability statuses. Unavailable paths remain visible with `NA` indirect
 inference. BH correction is within analysis, stratum, FU, and contrast; filtered
 DNAm correction uses explicit `IN_FILTERED_SET` membership.
 
+Follow-up labels are inherited from upstream `metadata$fu_labels` and/or
+effect-table `FU_LABEL` columns. Labeled output adds `FU_LABEL` beside the
+numeric `FU` and stores the resolved map in `attr(results, "metadata")$fu_labels`.
+No additional argument is required. If neither input supplies labels, mediation
+continues without a label warning or added label fields. If only one input
+supplies labels, mediation inherits them and warns once that agreement could
+not be checked. When both supply labels, shared codes must agree exactly,
+including baseline metadata; conflicts are errors. Numeric FU codes remain the
+join keys, and partial legacy inputs retain unknown labels as `NA`.
+See [the label rules](INPUTS_OUTPUTS.md#follow-up-labels).
+
 The pipeline uses summary results only and does not source or refit either
 upstream pipeline. Sobel inference ignores alpha–beta covariance, and the
 summary tables do not supply covariance for comparing interventions.
 
-Run `Rscript tests/mediation/test_multiarm.R` for contrast and inference checks.
+Run `Rscript tests/mediation/test_comprehensive.R` for the primary scenarios,
+including visible follow-up labels, and `Rscript tests/mediation/test_multiarm.R`
+for contrast and inference checks.
 `Rscript tests/mediation/test_upstream_multiarm.R` additionally fits the synthetic
 data through the local Track 1.1.1 checkout, then OutcomeWAS and mediation; set
 `TRACK111_DIR` if that checkout is not the sibling directory. All suites are

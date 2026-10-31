@@ -63,7 +63,8 @@
 }
 
 
-.validate_pheno <- function(pheno, additional_covariates = NULL, treatment_labels = NULL) {
+.validate_pheno <- function(pheno, additional_covariates = NULL, treatment_labels = NULL,
+                            fu_labels = NULL) {
 
   if (is.matrix(pheno)) {
     pheno <- as.data.frame(pheno)
@@ -116,6 +117,7 @@
     warning("FU column is not a factor. Converting to factor.")
   }
   pheno$FU <- factor(fu_num)
+  fu_labels <- .validate_outcome_fu_labels(fu_labels, as.character(unique_fu))
 
   if (!all(pheno$FEMALE %in% 0:1)) {
     stop("FEMALE must contain only values 0 or 1")
@@ -245,7 +247,8 @@
     outcome_type = outcome_type,
     requires_mixed_effects = FALSE,
     treatments = prepared$treatments,
-    treatment_labels = prepared$treatment_labels
+    treatment_labels = prepared$treatment_labels,
+    fu_labels = fu_labels
   )
 }
 

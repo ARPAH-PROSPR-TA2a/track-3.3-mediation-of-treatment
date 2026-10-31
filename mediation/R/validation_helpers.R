@@ -107,6 +107,76 @@
   labels
 }
 
+# Resolve visit labels separately from numeric joins and inference.
+# Baseline may be metadata-only; effect rows remain positive FU.
+.mediation_fu_labels <- function(results, role) {
+  metadata <- results$metadata$fu_labels
+  if (!is.null(metadata)) {
+    codes <- names(metadata)
+    numbers <- suppressWarnings(as.integer(codes))
+    if (!is.character(metadata) || !is.null(dim(metadata)) || !length(metadata) ||
+        is.null(codes) || anyNA(numbers) || any(numbers < 0L) ||
+        any(as.character(numbers) != codes) || anyDuplicated(codes)) {
+      stop(role, " metadata$fu_labels must be a named character vector with unique non-negative integer FU codes.")
+    }
+    .validate_mediation_labels(metadata, paste0(role, " metadata$fu_labels"))
+  }
+
+  effect_name <- if (role == "treatment") "treatment_effects" else "outcome_effects"
+  observed <- character()
+  rows <- list()
+  for (analysis in .supported_analyses) {
+    for (stratum in intersect(.supported_strata, names(results[[analysis]]))) {
+      table <- results[[analysis]][[stratum]][[effect_name]]
+      if (is.null(table)) next
+      codes <- as.character(table$FU)
+      observed <- union(observed, codes)
+      if (!"FU_LABEL" %in% names(table)) next
+      context <- paste(role, analysis, stratum, "FU_LABEL")
+      if (!is.character(table$FU_LABEL)) stop(context, " must be character.")
+      labels <- .validate_mediation_labels(table$FU_LABEL, context)
+      rows[[length(rows) + 1L]] <- unique(data.frame(FU = codes, FU_LABEL = labels))
+    }
+  }
+  if (!is.null(metadata) && any(!observed %in% names(metadata))) {
+    stop(role, " metadata$fu_labels must cover every observed FU code in its effect tables.")
+  }
+  row_map <- NULL
+  if (length(rows)) {
+    rows <- unique(do.call(rbind, rows))
+    if (anyDuplicated(rows$FU)) {
+      stop(role, " FU_LABEL must map each FU consistently across analyses and strata.")
+    }
+    row_map <- setNames(rows$FU_LABEL, rows$FU)
+  }
+  if (!is.null(metadata) && !is.null(row_map) &&
+      any(unname(metadata[names(row_map)]) != unname(row_map))) {
+    stop(role, " FU_LABEL disagrees with metadata$fu_labels.")
+  }
+  labels <- if (!is.null(metadata)) metadata else row_map
+  if (is.null(labels)) return(NULL)
+  labels[order(as.integer(names(labels)))]
+}
+
+.resolve_mediation_fu_labels <- function(treatment_results, outcome_results) {
+  alpha <- .mediation_fu_labels(treatment_results, "treatment")
+  beta <- .mediation_fu_labels(outcome_results, "outcome")
+  if (xor(is.null(alpha), is.null(beta))) {
+    source <- if (is.null(alpha)) "beta (outcome)" else "alpha (treatment)"
+    warning("Follow-up labels are supplied only by ", source,
+            "; continuing with numeric FU matching and inheriting those labels. ",
+            "Label agreement could not be checked.", call. = FALSE)
+  }
+  common <- intersect(names(alpha), names(beta))
+  if (any(unname(alpha[common]) != unname(beta[common]))) {
+    stop("Follow-up labels disagree between alpha and beta for FU: ",
+         paste(common[unname(alpha[common]) != unname(beta[common])], collapse = ", "), ".")
+  }
+  labels <- c(alpha, beta[setdiff(names(beta), names(alpha))])
+  if (is.null(labels)) return(NULL)
+  labels[order(as.integer(names(labels)))]
+}
+
 .validate_results_object <- function(results, role, outcome_type = NULL) {
   if (!is.list(results)) stop(role, " results must be a list.")
   missing_analyses <- setdiff(.supported_analyses, names(results))

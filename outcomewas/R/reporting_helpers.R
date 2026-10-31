@@ -379,10 +379,19 @@
   )
 
   .log_33(verbose, "reports phenotype summary (serial)")
-  list(
+  reports <- list(
     pheno_summary = .create_pheno_data_report(pheno_list$all),
     arm_counts = .create_arm_counts_report(pheno_list$all, treatments),
     variable_summaries = variable_summaries,
     outcome_reports = outcome_reports
   )
+  if (!is.null(pheno_list$fu_labels)) {
+    for (table in c("pheno_summary", "arm_counts")) {
+      reports[[table]] <- .attach_outcome_fu_labels(reports[[table]], pheno_list$fu_labels)
+    }
+    reports$outcome_reports$analysis_sample_summary <- .attach_outcome_fu_labels(
+      reports$outcome_reports$analysis_sample_summary, pheno_list$fu_labels
+    )
+  }
+  reports
 }

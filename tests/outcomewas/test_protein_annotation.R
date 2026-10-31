@@ -251,6 +251,93 @@ expect_true(
   "Duplicate FU label values are allowed as row metadata"
 )
 
+# Core labeling and annotation labeling share the same visit identity. Core
+# metadata may include baseline even though these tables only contain follow-ups.
+local({
+  full_labels <- c(`0` = "Baseline", fu_labels)
+  labeled <- results
+  labeled$metadata <- list(fu_labels = full_labels, note = "preserve metadata")
+  for (analysis in c("analysis_change", "analysis_level")) {
+    for (stratum in c("all", "male")) {
+      for (table in c("coefficients", "outcome_effects")) {
+        entry <- labeled[[analysis]][[stratum]][[table]]
+        entry$FU_LABEL <- unname(full_labels[as.character(entry$FU)])
+        labeled[[analysis]][[stratum]][[table]] <- entry
+      }
+    }
+  }
+  original <- unserialize(serialize(labeled, NULL))
+  preserved <- get_annotated_results(labeled, annotation)
+  explicit <- get_annotated_results(labeled, annotation, full_labels)
+  expect_true(identical(preserved, explicit) && identical(labeled, original),
+              "Existing visit labels accept matching full maps without mutating input")
+  expect_true(identical(preserved$metadata, labeled$metadata),
+              "Core visit metadata remains unchanged")
+  expect_true(identical(get_annotated_results(labeled, annotation, fu_labels["1"]), preserved),
+              "Partial explicit maps can inherit consistent visit coverage")
+  for (analysis in c("analysis_change", "analysis_level")) {
+    for (stratum in c("all", "male")) {
+      for (table in c("coefficients", "outcome_effects")) {
+        before <- labeled[[analysis]][[stratum]][[table]]
+        after <- preserved[[analysis]][[stratum]][[table]]
+        expect_true(identical(after[names(before)], before) &&
+                      sum(names(after) == "FU_LABEL") == 1L &&
+                      identical(names(after)[match("FU", names(after)) + 1L], "FU_LABEL"),
+                    paste(analysis, stratum, table, "preserves one FU_LABEL alongside FU"))
+      }
+    }
+  }
+  metadata_only <- results
+  metadata_only$metadata <- labeled$metadata
+  from_metadata <- get_annotated_results(metadata_only, annotation)
+  expect_true(identical(from_metadata, preserved),
+              "Metadata supplies visit labels when row columns are absent")
+  partial_metadata <- labeled
+  partial_metadata$metadata$fu_labels <- full_labels[c("0", "1")]
+  completed_metadata <- get_annotated_results(partial_metadata, annotation)
+  expect_true(identical(completed_metadata, preserved) &&
+                identical(partial_metadata$metadata$fu_labels, full_labels[c("0", "1")]),
+              "Row labels complete existing metadata without changing the input")
+  partial_metadata_only <- metadata_only
+  partial_metadata_only$metadata$fu_labels <- full_labels[c("0", "1")]
+  completed_explicit <- get_annotated_results(partial_metadata_only, annotation, fu_labels["5"])
+  expect_true(identical(completed_explicit, preserved),
+              "Complementary explicit and metadata maps produce complete coherent metadata")
+  row_only <- labeled
+  row_only$metadata <- NULL
+  from_rows <- get_annotated_results(row_only, annotation)
+  expect_true(is.null(from_rows$metadata) &&
+                identical(from_rows$analysis_change$all$outcome_effects$FU_LABEL,
+                          preserved$analysis_change$all$outcome_effects$FU_LABEL),
+              "Row-only labels remain valid without adding metadata to legacy objects")
+  mismatched <- full_labels
+  mismatched["1"] <- "different visit"
+  expect_error(get_annotated_results(labeled, annotation, mismatched), "labels disagree",
+                "Explicit maps cannot replace conflicting core visit labels")
+  mismatched <- full_labels
+  mismatched["0"] <- "Other baseline"
+  expect_error(get_annotated_results(labeled, annotation, mismatched), "labels disagree",
+                "Baseline metadata conflicts are rejected")
+  conflicting <- labeled
+  entry <- conflicting$analysis_change$all$outcome_effects
+  entry$FU_LABEL[entry$FU == 1L] <- "different visit"
+  conflicting$analysis_change$all$outcome_effects <- entry
+  expect_error(get_annotated_results(conflicting, annotation), "labels disagree",
+                "Row labels must agree with metadata")
+  conflicting <- row_only
+  conflicting$analysis_level$male$coefficients$FU_LABEL <- "different visit"
+  expect_error(get_annotated_results(conflicting, annotation), "labels disagree",
+                "Row labels must agree across tables, analyses, and strata")
+  conflicting <- row_only
+  conflicting$analysis_change$all$outcome_effects$FU_LABEL[1L] <- "different visit"
+  expect_error(get_annotated_results(conflicting, annotation), "conflicting FU_LABEL",
+                "Each visit must have one consistent row label")
+  conflicting <- row_only
+  conflicting$analysis_change$all$outcome_effects$FU_LABEL[1L] <- NA_character_
+  expect_error(get_annotated_results(conflicting, annotation), "non-missing, nonblank",
+                "Missing incoming row labels are rejected")
+})
+
 tte_results <- make_results(
   coefficients = make_coefficients(tte = TRUE, extra = TRUE),
   effects = make_effects(tte = TRUE, extra = TRUE)
@@ -354,9 +441,9 @@ expect_error(get_annotated_results(reserved_coefficients, annotation),
              "coefficients contains reserved annotation columns: SomaId",
              "Reserved annotation columns in coefficients error")
 reserved_outcomes <- results
-reserved_outcomes$analysis_change$all$outcome_effects$FU_LABEL <- "collision"
+reserved_outcomes$analysis_change$all$outcome_effects$Target <- "collision"
 expect_error(get_annotated_results(reserved_outcomes, annotation),
-             "outcome_effects contains reserved annotation columns: FU_LABEL",
+             "outcome_effects contains reserved annotation columns: Target",
              "Reserved annotation columns in outcomes error")
 
 duplicate_coefficient_columns <- results
@@ -490,5 +577,17 @@ failed_annotated <- get_annotated_results(failed_results, annotation, c(`1` = "V
 expect_true(nrow(failed_annotated$analysis_change$all$coefficients) == 0L &&
               nrow(failed_annotated$analysis_change$all$outcome_effects) == nrow(multiarm_effects),
             "All-failed cells retain annotated outcome placeholders and empty coefficient tables")
+failed_results$metadata <- list(fu_labels = c(`0` = "Baseline", `1` = "Visit 1", `5` = "Visit 5"))
+for (analysis in c("analysis_change", "analysis_level")) {
+  for (stratum in c("all", "male")) {
+    failed_results[[analysis]][[stratum]]$coefficients$FU_LABEL <- character()
+    failed_results[[analysis]][[stratum]]$outcome_effects$FU_LABEL <-
+      unname(failed_results$metadata$fu_labels[as.character(multiarm_effects$FU)])
+  }
+}
+failed_labeled <- get_annotated_results(failed_results, annotation)
+expect_true(nrow(failed_labeled$analysis_change$all$coefficients) == 0L &&
+              sum(names(failed_labeled$analysis_change$all$coefficients) == "FU_LABEL") == 1L,
+            "Pre-labeled failed cells preserve the empty coefficient schema")
 
 cat("\nAll OutcomeWAS protein annotation tests passed.\n")

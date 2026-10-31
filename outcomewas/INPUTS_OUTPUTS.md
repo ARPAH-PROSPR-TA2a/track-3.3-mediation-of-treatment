@@ -71,6 +71,18 @@ treatment_labels = c(`0` = "Control", `1` = "Diet", `2` = "Exercise")
 
 Binary calls need no changes: the default labels are `Control` and `Treatment`.
 
+`fu_labels` is optional in both public functions:
+
+```r
+fu_labels = c(`0` = "Baseline", `1` = "12mo", `2` = "24mo")
+```
+
+It must be a named character vector covering exactly the FU codes observed in
+the full phenotype input, including `0`, before filtering or stratification.
+Keys and labels must be unique, nonmissing, and nonblank. The mapping describes
+omics visits; it does not change the baseline, visit order, outcome timing, or
+model. Its order has no effect. The default `NULL` preserves existing outputs.
+
 Optional additional covariates:
 
 - Named through the `additional_covariates` argument.
@@ -164,6 +176,8 @@ DNAm scale:
   follow-up row used for each analysis.
 - `treatment_labels`: Optional named treatment-code mapping described above.
   Accepted by both public functions; required with multiple active arms.
+- `fu_labels`: Optional visit-code mapping described above, accepted by both
+  public functions. Labels are attached after inference and all BH correction.
 - `n_cores`: `FAST_outcome_WAS()` only. Number of workers for parallel model
   fitting. Defaults to `max(1, parallel::detectCores() - 1)`, with
   `future::availableCores()` as the fallback when detection is unavailable.
@@ -187,6 +201,8 @@ checkpoint_dir/
   directories from M-value runs. Use a fresh directory after changing treatment
   labels or upgrading across this schema change. Resume assumes unchanged data
   and settings; there is no run fingerprint.
+  Changing only `fu_labels` does not require fresh checkpoints: numeric FU paths
+  and batch payloads remain unchanged.
 - `verbose`: Logical flag accepted by both public functions. Default: `FALSE`.
   When `TRUE`, emits `[3.3]` validation and stage progress. Analysis logs include
   response/stratum/FU labels, checkpoint reuse, worker PIDs, failures, and
@@ -281,6 +297,7 @@ is `NA`; failed fits have no coefficient rows.
 |:---|:---|
 | `schema_version` | `"2.0"` |
 | `treatment_labels` | Named code-to-label vector |
+| `fu_labels` | Optional full visit-code-to-label vector, including baseline |
 | `treatments` | Active-arm mapping: `ARM`, `TREATMENT`, `REFERENCE`, `CONTRAST` |
 | `outcome_type` | `"continuous"` or `"tte"` |
 | `additional_covariates` | Requested adjustment columns |
@@ -315,6 +332,7 @@ Common columns:
 |:---|:---|
 | `ANALYTE_NAME` | Analyte identifier |
 | `FU` | Follow-up level for this model |
+| `FU_LABEL` | When labels are supplied, the display label beside `FU` |
 | `COEFFICIENT` | Model term |
 | `N_OBS` | Number of observations used in the fit |
 | `EFFECT_SIZE` | Coefficient estimate |
@@ -338,6 +356,10 @@ Additional columns:
 ---
 
 ### `$outcome_effects`
+
+When `fu_labels` is supplied, this table also includes `FU_LABEL` immediately
+after numeric `FU`. Both result tables use the same mapping. `COEFFICIENT`
+names remain unchanged because each follow-up has its own model.
 
 Within each analysis and stratum, the unique key is `ANALYTE_NAME × FU`.
 Available rows contain the common analyte slope; unavailable rows preserve the
@@ -417,7 +439,8 @@ follow-ups remain together rather than being split into per-FU tables.
 Missing required columns are errors. `AptName` must be non-missing, non-empty,
 and unique; violations are errors because they would make the annotation join
 ambiguous. Source column names must be unique and cannot reuse an output
-annotation field or `FU_LABEL`. The join preserves the OutcomeWAS row order and
+annotation field. Existing `FU_LABEL` columns are accepted and validated.
+The join preserves the OutcomeWAS row order and
 row count. Analytes without an `AptName` match remain in the output with `NA`
 annotation fields and produce a warning. If either table has no matched analytes
 within an FU, the function stops. Translation rows unused by a result table are
@@ -430,11 +453,17 @@ character representations of `FU`, for example:
 c("1" = "3mo", "2" = "6mo", "3" = "12mo", "4" = "24mo")
 ```
 
-Its names must be unique positive-integer FU values and its values must be
-nonblank labels. Label values may repeat. It must cover every FU in each table
-and supplies the row-wise `FU_LABEL` field. This explicit mapping supports
-arbitrary follow-up values without imposing CALERIE's four-visit convention.
-When `fu_labels = NULL`, `FU_LABEL` is omitted.
+Its names must be unique nonnegative-integer FU values and its values must be
+nonblank labels. Baseline `0` is optional for annotation, allowing reuse of a
+full pipeline map. Annotation-only label values may repeat for compatibility.
+When labels are available, their resolved mapping must cover every FU in each
+table. An explicit map may be completed from existing row labels or metadata,
+but overlapping entries must agree. An existing `metadata$fu_labels` field is
+completed with the resolved map; other metadata and legacy object structure
+are preserved. Without an explicit map, annotation preserves and reconciles
+labels already present in tables or metadata; disagreements are errors. This
+supports arbitrary follow-up values without imposing CALERIE's four-visit
+convention. `FU_LABEL` is omitted only when no labels are available.
 
 For continuous outcomes with `fu_labels` supplied, annotated
 `outcome_effects` preserve these columns:
@@ -458,7 +487,7 @@ STATUS
 BH_P_VALUE
 ```
 
-Without `fu_labels`, the continuous table omits `FU_LABEL`.
+Without any supplied or inherited labels, the continuous table omits `FU_LABEL`.
 For time-to-event outcomes, the same contract also preserves `HAZARD_RATIO`
 in source-column order. All source columns following `FU` retain their
 original relative order, so any additional fields are preserved.
@@ -512,6 +541,10 @@ RDS files intact.
 ---
 
 ### `FAST_outcome_WAS_reports()`
+
+When `fu_labels` is supplied, `pheno_summary`, `arm_counts`, and
+`outcome_reports$analysis_sample_summary` contain `FU_LABEL` beside `FU`.
+The mapping is retained in report metadata. Variable-summary keys stay numeric.
 
 Returns:
 

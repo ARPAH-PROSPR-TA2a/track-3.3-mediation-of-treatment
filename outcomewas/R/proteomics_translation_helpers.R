@@ -29,12 +29,12 @@
 }
 
 
-.validate_fu_labels <- function(fu_labels) {
+.validate_annotation_fu_labels <- function(fu_labels) {
   if (is.null(fu_labels)) {
     return(NULL)
   }
 
-  if (!is.character(fu_labels) || length(fu_labels) == 0L) {
+  if (!is.character(fu_labels) || !is.null(dim(fu_labels)) || length(fu_labels) == 0L) {
     stop("fu_labels must be NULL or a non-empty named character vector.")
   }
 
@@ -45,7 +45,14 @@
     stop("fu_labels must have a nonblank name for every label.")
   }
 
-  label_fu <- .as_positive_integer_fu(label_names, "names(fu_labels)")
+  # Core result metadata includes baseline 0; annotation-only callers may
+  # continue supplying only the positive visits present in their tables.
+  label_fu <- suppressWarnings(as.numeric(label_names))
+  if (anyNA(label_fu) || any(!is.finite(label_fu)) ||
+      any(label_fu < 0 | label_fu != floor(label_fu) | label_fu > .Machine$integer.max)) {
+    stop("names(fu_labels) must contain only non-negative integer values.")
+  }
+  label_fu <- as.integer(label_fu)
   normalized_names <- as.character(label_fu)
   if (anyDuplicated(normalized_names)) {
     stop("fu_labels must have unique FU names.")
@@ -57,6 +64,46 @@
 
   names(fu_labels) <- normalized_names
   fu_labels
+}
+
+
+.resolve_annotation_fu_labels <- function(results, fu_labels) {
+  labels <- .validate_annotation_fu_labels(fu_labels)
+  merge_labels <- function(incoming, context) {
+    shared <- intersect(names(labels), names(incoming))
+    if (any(labels[shared] != incoming[shared])) {
+      stop("Follow-up labels disagree with ", context, " for FU: ",
+           paste(shared[labels[shared] != incoming[shared]], collapse = ", "))
+    }
+    labels <<- c(labels, incoming[setdiff(names(incoming), names(labels))])
+  }
+  merge_labels(.validate_annotation_fu_labels(results$metadata$fu_labels), "metadata$fu_labels")
+
+  # Resolve all available row labels before annotating any table, so label
+  # consistency does not depend on table, stratum, or analysis iteration order.
+  for (analysis in c("analysis_change", "analysis_level")) {
+    if (!is.list(results[[analysis]])) next
+    for (stratum in c("all", "male", "female")) {
+      entry <- results[[analysis]][[stratum]]
+      if (!is.list(entry)) next
+      for (table_name in c("coefficients", "outcome_effects")) {
+        table <- entry[[table_name]]
+        if (!is.data.frame(table) || !"FU_LABEL" %in% names(table)) next
+        context <- paste(analysis, stratum, table_name, sep = "/")
+        if (!"FU" %in% names(table)) stop(context, " is missing required columns: FU")
+        row_labels <- as.character(table$FU_LABEL)
+        if (anyNA(row_labels) || any(!nzchar(trimws(row_labels)))) {
+          stop(context, "$FU_LABEL must contain non-missing, nonblank labels.")
+        }
+        if (!nrow(table)) next
+        visits <- .as_positive_integer_fu(table$FU, paste0(context, "$FU"))
+        mapping <- unique(data.frame(FU = visits, FU_LABEL = row_labels))
+        if (anyDuplicated(mapping$FU)) stop(context, " has conflicting FU_LABEL values for the same FU.")
+        merge_labels(setNames(mapping$FU_LABEL, as.character(mapping$FU)), context)
+      }
+    }
+  }
+  if (length(labels)) labels else NULL
 }
 
 
@@ -109,7 +156,7 @@
     stop(table_name, " column names must be unique.")
   }
 
-  reserved_columns <- c(.protein_annotation_columns, "FU_LABEL")
+  reserved_columns <- .protein_annotation_columns
   conflicting_columns <- intersect(names(result_table), reserved_columns)
   if (length(conflicting_columns) > 0L) {
     stop(
@@ -202,7 +249,7 @@
   ]
   remaining_columns <- setdiff(
     names(result_table),
-    c("ANALYTE_NAME", "FU")
+    c("ANALYTE_NAME", "FU", "FU_LABEL")
   )
 
   output_parts <- list(
@@ -215,6 +262,8 @@
       FU_LABEL = unname(fu_labels[as.character(result_fu)]),
       stringsAsFactors = FALSE
     )
+  } else if ("FU_LABEL" %in% names(result_table)) {
+    output_parts[[length(output_parts) + 1L]] <- result_table[, "FU_LABEL", drop = FALSE]
   }
   output_parts[[length(output_parts) + 1L]] <- result_table[
     , remaining_columns,
@@ -241,7 +290,7 @@ get_annotated_results <- function(
     stop("results must be a FAST_outcome_WAS result list.")
   }
 
-  validated_labels <- .validate_fu_labels(fu_labels)
+  validated_labels <- .resolve_annotation_fu_labels(results, fu_labels)
   annotation_keys <- .validate_protein_annotation(protein_annotation)
   annotated_results <- results
   annotated_table_count <- 0L
@@ -287,6 +336,14 @@ get_annotated_results <- function(
 
   if (annotated_table_count == 0L) {
     stop("results does not contain any available result tables.")
+  }
+
+  # Keep an existing metadata map as complete as the labeled tables. Legacy
+  # objects without this field retain their topology and carry labels in rows.
+  if (!is.null(results$metadata$fu_labels)) {
+    recorded_labels <- .validate_annotation_fu_labels(results$metadata$fu_labels)
+    additional_labels <- validated_labels[setdiff(names(validated_labels), names(recorded_labels))]
+    annotated_results$metadata$fu_labels <- c(recorded_labels, additional_labels)
   }
 
   annotated_results

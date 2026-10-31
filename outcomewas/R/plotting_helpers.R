@@ -55,6 +55,15 @@ library(ggplot2)
   keep
 }
 
+.outcome_fu_plot_label <- function(outcome_effects, fu) {
+  if (!"FU_LABEL" %in% names(outcome_effects)) return(paste0("FU=", fu))
+  labels <- unique(as.character(outcome_effects$FU_LABEL[outcome_effects$FU == fu]))
+  if (length(labels) != 1L || anyNA(labels) || !nzchar(trimws(labels))) {
+    stop("Each FU must identify exactly one non-blank FU_LABEL")
+  }
+  labels
+}
+
 
 .outcome_empty_plot_label <- function(oe, probe_set) {
   if (nrow(oe) == 0L && probe_set == "filtered") {
@@ -74,7 +83,8 @@ plot_qq <- function(results, stratum = "all", fu = 1, probe_set = "full",
   pvals <- oe$P_VALUE[.outcome_plot_estimable(oe)]
 
   if (is.null(title)) {
-    title <- paste0("QQ Plot - ", stratum, ", FU=", fu, ", ", probe_set)
+    title <- paste0("QQ Plot - ", stratum, ", ",
+                    .outcome_fu_plot_label(results[[stratum]]$outcome_effects, fu), ", ", probe_set)
   }
 
   if (!length(pvals)) {
@@ -96,7 +106,8 @@ plot_volcano <- function(results, stratum = "all", fu = 1, probe_set = "full",
   probe_set <- match.arg(probe_set, c("full", "filtered"))
   oe <- .outcome_plot_rows(results, stratum, fu, probe_set)
   if (is.null(title)) {
-    title <- paste0("Volcano Plot - ", stratum, ", FU=", fu, ", ", probe_set)
+    title <- paste0("Volcano Plot - ", stratum, ", ",
+                    .outcome_fu_plot_label(results[[stratum]]$outcome_effects, fu), ", ", probe_set)
   }
   keep <- .outcome_plot_estimable(oe)
   if (!any(keep)) {

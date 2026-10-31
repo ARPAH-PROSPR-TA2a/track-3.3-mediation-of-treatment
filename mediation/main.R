@@ -12,6 +12,7 @@ FAST_mediation <- function(treatment_results,
     role = "outcome",
     outcome_type = outcome_type
   )
+  fu_labels <- .resolve_mediation_fu_labels(treatment_results, outcome_results)
 
   outcome_labels <- .mediation_metadata_labels(outcome_results, "outcome")
   treatment_labels <- .mediation_metadata_labels(treatment_results, "treatment")
@@ -61,6 +62,15 @@ FAST_mediation <- function(treatment_results,
         outcome_type = outcome_type,
         outcome_labels = outcome_labels
       )
+      # Presentation only: unknown visits in legacy partial inputs remain NA.
+      if (!is.null(fu_labels)) {
+        effects <- output[[analysis]][[stratum]]$mediation_effects
+        effects$FU_LABEL <- unname(fu_labels[as.character(effects$FU)])
+        columns <- setdiff(names(effects), "FU_LABEL")
+        output[[analysis]][[stratum]]$mediation_effects <- effects[
+          , append(columns, "FU_LABEL", after = match("FU", columns)), drop = FALSE
+        ]
+      }
     }
   }
 
@@ -84,5 +94,6 @@ FAST_mediation <- function(treatment_results,
       "exp(product) is a Cox product approximation, not a general causal indirect hazard ratio"
     } else NULL
   )
+  if (!is.null(fu_labels)) attr(output, "metadata")$fu_labels <- fu_labels
   output
 }

@@ -39,6 +39,7 @@ if (!file.exists(.outcomewas_source_file) &&
 .outcomewas_dir <- dirname(normalizePath(.outcomewas_source_file, mustWork = TRUE))
 
 source(file.path(.outcomewas_dir, "R", "treatment_helpers.R"))
+source(file.path(.outcomewas_dir, "R", "followup_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "validation_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "reporting_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "analysis_helpers.R"))
@@ -54,7 +55,8 @@ FAST_outcome_WAS <- function(pheno,
                              checkpoint_dir = NULL,
                              checkpoint_batch_size = 2000L,
                              verbose = FALSE,
-                             treatment_labels = NULL) {
+                             treatment_labels = NULL,
+                             fu_labels = NULL) {
 
   analysis_started <- proc.time()[["elapsed"]]
 
@@ -85,7 +87,7 @@ FAST_outcome_WAS <- function(pheno,
   .log_33(verbose, "analysis validating inputs and preparing data (serial)")
   .validate_omics_type(omics_type)
 
-  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels)
+  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels, fu_labels)
   omics_list <- .validate_omics(omics, pheno_list, verbose = verbose)
 
   filtered_probes <- NULL
@@ -162,14 +164,15 @@ FAST_outcome_WAS_reports <- function(pheno,
                                      omics_type = "Proteomics",
                                      additional_covariates = NULL,
                                      verbose = FALSE,
-                                     treatment_labels = NULL) {
+                                     treatment_labels = NULL,
+                                     fu_labels = NULL) {
 
   reports_started <- proc.time()[["elapsed"]]
   .log_33(verbose, "reports validating inputs (serial)")
 
   .validate_omics_type(omics_type)
 
-  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels)
+  pheno_list <- .validate_pheno(pheno, additional_covariates, treatment_labels, fu_labels)
   omics_list <- .validate_omics(omics, pheno_list, verbose = verbose)
 
   if (omics_type == "DNAm") {

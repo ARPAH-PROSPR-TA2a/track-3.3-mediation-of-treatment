@@ -102,6 +102,27 @@ There is no treatment-by-analyte interaction option. Outcome-effect rows have
 no `ARM`, `CONTRAST`, `TREATMENT`, or `REFERENCE` fields. See the synthetic
 [three-arm example](Examples/run_multiarm_example.R).
 
+### Follow-up labels
+
+Both public functions accept an optional visit-label mapping:
+
+```r
+visits <- c(`0` = "Baseline", `1` = "12mo", `2` = "24mo")
+results <- FAST_outcome_WAS(pheno, omics, fu_labels = visits)
+reports <- FAST_outcome_WAS_reports(pheno, omics, fu_labels = visits)
+```
+
+The map must cover exactly the FU codes in the full phenotype input, including
+baseline `0`, with unique, nonmissing, nonblank labels. Numeric codes, visit
+order, and baseline calculations stay unchanged. These labels describe the
+omics visit, not the outcome measurement time or survival duration.
+
+Both `coefficients` and `outcome_effects` gain `FU_LABEL` beside `FU`, and
+`metadata$fu_labels` stores the full map. OutcomeWAS fits each visit separately,
+so coefficient names such as `analyte` remain unchanged. Labels are applied
+after inference and BH correction. With `fu_labels = NULL`, existing output
+names and columns are preserved.
+
 ### Parameters
 
 - **`pheno`** (`data.frame`): Phenotype data with required columns. See
@@ -119,6 +140,8 @@ no `ARM`, `CONTRAST`, `TREATMENT`, or `REFERENCE` fields. See the synthetic
   exactly, including `0`; labels must be unique, nonmissing, and nonblank.
   Required for multiple active arms. Binary defaults are `Control` and
   `Treatment`.
+- **`fu_labels`** (named character vector, optional): Visit-code mapping,
+  including baseline `0`, as described above. Default: `NULL`.
 - **`n_cores`** (`integer`, optional): Number of workers used for analyte-level
   parallel model fitting. Defaults to `max(1, parallel::detectCores() - 1)`,
   with `future::availableCores()` as the fallback when detection is unavailable.
@@ -205,7 +228,8 @@ by Track 1.1.1: `AptName`, `SomaId`, `TargetFullName`, `Target`, `UniProt`,
 `EntrezGeneID`, `EntrezGeneSymbol`, `Uniprot_Unique`, and `Symbol_Unique`.
 Missing required columns or duplicate, missing, or empty `AptName` values are
 errors. Source column names must be unique and cannot reuse an output annotation
-field or `FU_LABEL`. Partial coverage retains unmatched result rows with `NA`
+field. Existing `FU_LABEL` columns are preserved and checked for consistency.
+Partial coverage retains unmatched result rows with `NA`
 annotations and produces a warning; zero coverage within any FU is an error.
 Extra translation rows are allowed. Annotation preserves row count and order.
 
@@ -220,9 +244,11 @@ EFFECT_SIZE, SE, P_VALUE, STATUS, BH_P_VALUE
 
 Time-to-event tables additionally preserve `HAZARD_RATIO` in source-column
 order. Follow-up values are not restricted to the CALERIE `1:4`
-convention. `fu_labels` is an optional named character vector whose unique FU
-names map to nonblank labels; label values may repeat. With `fu_labels = NULL`,
-`FU_LABEL` is omitted.
+convention. Annotation-only `fu_labels` maps may omit baseline and retain their
+legacy support for repeated label values. Full maps including `0` are also
+accepted. When labels already exist in the rows or `metadata$fu_labels`, an
+explicit map must agree; conflicts are errors. With no explicit map, annotation
+inherits known labels. `FU_LABEL` is omitted only when no labels are available.
 
 In `coefficients`, the same eight annotation columns are inserted immediately
 after `ANALYTE_NAME`, followed by `FU`, optional `FU_LABEL`, and all remaining
@@ -243,7 +269,7 @@ save the original results and annotated results separately as
 ## FAST_outcome_WAS_reports()
 
 Generates QC and data summary reports. Takes the same `pheno`, `omics`,
-`omics_type`, `additional_covariates`, and `treatment_labels` arguments as
+`omics_type`, `additional_covariates`, `treatment_labels`, and `fu_labels` arguments as
 `FAST_outcome_WAS()` and runs the same input validation, but does not fit
 models.
 
@@ -281,6 +307,8 @@ A list containing:
 
 `N_TREATMENT` pools all active arms. Variable-summary names preserve the codes
 (e.g., `omics_FU1_Tx2`); the label mapping identifies them in the reports.
+With `fu_labels`, `pheno_summary`, `arm_counts`, and
+`outcome_reports$analysis_sample_summary` add `FU_LABEL` beside `FU`.
 
 ## Checkpointing
 
@@ -317,6 +345,8 @@ file existence without checking those settings. Use a new checkpoint directory
 when any of them changes, including treatment labels, switching
 from M-values to beta values, or updating across this result-schema change. Save/resume
 assumes unchanged data and settings; it does not fingerprint the run.
+Changing only `fu_labels` is safe on resume: labels are attached after cached
+batches are read, and neither checkpoint payloads nor numeric FU paths change.
 
 ## Data Format Requirements
 
@@ -462,6 +492,9 @@ generate_all_plots(results, figures_dir = "my_figures", analysis = "analysis_lev
 For DNAm results, both full and filtered probe set plots use explicit probe
 membership. Plots display available common beta estimates. A cell with no
 estimable results receives a clearly labeled empty plot.
+Plot titles display `FU_LABEL` when available, including empty filtered plots.
+Numeric selectors such as `fu = 2` and titles for legacy unlabeled results are
+unchanged.
 
 ## Examples and Tests
 

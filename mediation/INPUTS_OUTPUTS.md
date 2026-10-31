@@ -72,6 +72,42 @@ model outputs are incompatible and must be regenerated with the common-beta
 model. Retain upstream metadata: table shape alone cannot prove which study
 arms contributed to an old beta fit.
 
+### Follow-up labels
+
+Labels are read from each upstream result's `metadata$fu_labels` and
+from `FU_LABEL` columns in its effect tables. There is no separate mediation
+`fu_labels` argument. Numeric FU codes remain the join keys; labels never
+remap visits.
+
+For matching numeric FU codes:
+
+| Label availability | Behavior |
+|:---|:---|
+| Neither input supplies labels | Continue without label fields or a label warning |
+| Only one input supplies labels | Inherit those labels and warn once per call that label agreement could not be checked |
+| Both supply matching labels | Continue with those labels and no label warning |
+| Both supply conflicting labels | Error; resolve the disagreement before mediation |
+
+Input validation and partial joins follow these rules:
+
+- Metadata maps use unique non-negative integer code names and nonmissing,
+  nonblank character labels. Baseline `0` is allowed but not required because
+  mediation effect tables contain only follow-ups. An explicitly supplied map
+  must cover that source's observed effect-table visits.
+- When present, `FU_LABEL` is a nonmissing, nonblank character column. Each
+  code must have one consistent label across that source's analyses and strata;
+  table labels must agree with metadata when both are supplied.
+- The two inputs must agree exactly on shared codes, including `0` when both
+  metadata maps contain it. `"12mo"` and `"Month 12"` are a conflict;
+  neither source takes precedence and no textual equivalence is inferred.
+- Either source can supply labels. Their known mappings are combined without
+  requiring identical follow-up sets. Partial joins keep their existing rows
+  and statuses; a retained legacy visit with no known label gets `NA`.
+
+Only presentation fields change. Products, Sobel standard errors, confidence
+intervals, hazard-ratio approximations, BH values, and join diagnostics are
+unchanged.
+
 ## Alignment and Availability
 
 The caller must ensure compatible treatment coding, analyte identifiers/scales,
@@ -159,6 +195,7 @@ whole-stratum pairs remain `NULL` after a warning.
 | Field | Meaning |
 |:---|:---|
 | `ANALYTE_NAME`, `FU`, `CONTRAST` | Unique indirect-effect identity |
+| `FU_LABEL` | When any upstream visit labels exist: display label beside `FU`; `NA` for unknown legacy visits |
 | `TREATMENT`, `REFERENCE` | Readable active and control labels from alpha |
 | `ALPHA_EFFECT`, `ALPHA_SE`, `ALPHA_STATUS` | Treatment-to-analyte path |
 | `BETA_EFFECT`, `BETA_SE`, `BETA_STATUS` | Common analyte-to-outcome path |
@@ -197,3 +234,6 @@ The returned object retains attributes `outcome_type`,
 - `alpha_beta_covariance = "not_included"` and
   `cross_contrast_covariance = "not_available"`;
 - `survival_interpretation`, the approximation caveat for survival output.
+
+When any follow-up labels are supplied, this metadata attribute also includes
+`fu_labels`, the resolved map of known codes (including baseline if provided).
