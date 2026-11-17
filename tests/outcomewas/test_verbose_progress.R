@@ -142,8 +142,9 @@ run_verbose_progress_tests <- function() {
     "Verbose analysis logs response, stratum, and follow-up"
   )
   expect_true(
-    has_message(verbose_run$messages, "2 batches (0 cached, 2 pending)") &&
-      has_message(verbose_run$messages, "dispatching 2 analytes across up to 2 workers"),
+    has_message(verbose_run$messages, "2 batches (0 checkpoint files found; contents checked on load)") &&
+      has_message(verbose_run$messages, "dispatching 2 analytes across up to 2 workers") &&
+      has_message(verbose_run$messages, "remaining for 1 pending batch"),
     "Verbose analysis logs checkpoint status and dispatch"
   )
 
@@ -179,14 +180,41 @@ run_verbose_progress_tests <- function() {
   expect_true(identical(verbose_run$value, cached_run$value),
               "Cached analysis preserves results")
   expect_true(
-    has_message(cached_run$messages, "2 batches (2 cached, 0 pending)") &&
-      has_message(cached_run$messages, "all batches cached; no workers launched"),
+    has_message(cached_run$messages, "2 batches (2 checkpoint files found; contents checked on load)") &&
+      has_message(cached_run$messages, "2 batches reused, 0 newly computed, 0 rebuilt from older formats") &&
+      has_message(cached_run$messages, "all batches reused; no workers launched"),
     "Second analysis reports fully cached execution"
   )
   expect_true(
     !has_message(cached_run$messages, "dispatching") &&
       !has_message(cached_run$messages, "worker PIDs observed"),
     "Fully cached analysis does not report worker dispatch"
+  )
+
+  # A missing batch followed by an older file must not be reported as fully
+  # cached, or have that unvalidated file excluded silently from progress.
+  batch_directory <- file.path(verbose_checkpoint_dir, "change", "all", "FU1")
+  unlink(file.path(batch_directory, "batch_1.rds"))
+  older_file <- file.path(batch_directory, "batch_2.rds")
+  older <- lapply(readRDS(older_file), function(result) {
+    if (result$outcome_effects$STATUS != "ok") return(NULL)
+    result$outcome_effects$STATUS <- NULL
+    result
+  })
+  saveRDS(older, older_file)
+  recovered_run <- capture_conditions(do.call(
+    FAST_outcome_WAS,
+    c(analysis_args, list(checkpoint_dir = verbose_checkpoint_dir, verbose = TRUE))
+  ))
+  expect_true(identical(verbose_run$value, recovered_run$value),
+              "Recovery progress preserves the fresh results")
+  expect_true(
+    has_message(recovered_run$messages, "1 checkpoint file still to validate") &&
+      has_message(recovered_run$messages,
+                  "change/all/FU1: 0 batches reused, 1 newly computed, 1 rebuilt from older formats") &&
+      !has_message(recovered_run$messages,
+                   "change/all/FU1: all batches reused; no workers launched"),
+    "Recovery progress accounts for missing and older batches accurately"
   )
 
   report_args <- list(

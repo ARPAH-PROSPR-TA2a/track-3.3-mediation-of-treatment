@@ -175,7 +175,7 @@
                                            response_type,
                                            paste0("FU", fu_level),
                                            sep = "/"
-                                         )) {
+                                         ), checkpoint_state = NULL) {
 
   response_type <- match.arg(response_type)
 
@@ -209,8 +209,11 @@
   } else {
     character(0)
   }
-  n_cached <- sum(file.exists(checkpoint_files))
-  n_pending <- length(batches) - n_cached
+  n_existing <- sum(file.exists(checkpoint_files))
+  n_unchecked <- n_existing
+  n_reused <- 0L
+  n_rebuilt <- 0L
+  n_pending <- length(batches) - n_existing
   completed_pending <- 0L
   pending_elapsed <- 0
   new_failures <- 0L
@@ -220,21 +223,28 @@
     verbose,
     paste0(
       progress_label, ": ", length(analyte_names), " analytes, ",
-      length(batches), " batches (", n_cached, " cached, ",
-      n_pending, " pending)"
+      length(batches), " batches (", n_existing,
+      " checkpoint files found; contents checked on load)"
     )
   )
-  if (length(batches) > 0L && n_pending == 0L) {
-    .log_33(verbose, paste0(progress_label, ": all batches cached; no workers launched"))
-  }
 
   for (b in seq_along(batches)) {
     batch <- batches[[b]]
     batch_file <- if (!is.null(checkpoint_dir)) file.path(checkpoint_dir, paste0("batch_", b, ".rds")) else NULL
 
-    if (!is.null(batch_file) && file.exists(batch_file)) {
-      all_results[batch] <- readRDS(batch_file)
+    batch_existed <- !is.null(batch_file) && file.exists(batch_file)
+    if (batch_existed) n_unchecked <- n_unchecked - 1L
+    batch_results <- .read_outcome_checkpoint(
+      batch_file, analyte_names[batch], fu_level, "continuous", checkpoint_state
+    )
+    if (!is.null(batch_results)) {
+      all_results[batch] <- batch_results
+      n_reused <- n_reused + 1L
       next
+    }
+    if (batch_existed) {
+      n_rebuilt <- n_rebuilt + 1L
+      n_pending <- n_pending + 1L
     }
 
     batch_started <- proc.time()[["elapsed"]]
@@ -325,8 +335,7 @@
     }
 
     if (!is.null(batch_file)) {
-      saveRDS(batch_results, paste0(batch_file, ".tmp"))
-      file.rename(paste0(batch_file, ".tmp"), batch_file)
+      .save_outcome_checkpoint(batch_results, batch_file)
     }
 
     all_results[batch] <- batch_results
@@ -339,11 +348,17 @@
       estimated_remaining <- pending_elapsed / completed_pending * remaining_pending
       paste0(
         "; estimated ", .format_duration_33(estimated_remaining),
-        " remaining for ", remaining_pending, " pending batch",
+        " remaining for ", remaining_pending,
+        if (n_unchecked > 0L) " known pending batch" else " pending batch",
         if (remaining_pending == 1L) "" else "es"
       )
     } else {
       ""
+    }
+    if (n_unchecked > 0L) {
+      eta_text <- paste0(eta_text, "; ", n_unchecked,
+                         " checkpoint file", if (n_unchecked == 1L) "" else "s",
+                         " still to validate")
     }
 
     .log_33(
@@ -358,6 +373,14 @@
         eta_text
       )
     )
+  }
+
+  .log_33(verbose, sprintf(
+    "%s: %d batches reused, %d newly computed, %d rebuilt from older formats",
+    progress_label, n_reused, completed_pending - n_rebuilt, n_rebuilt
+  ))
+  if (n_reused > 0L && n_reused == length(batches)) {
+    .log_33(verbose, paste0(progress_label, ": all batches reused; no workers launched"))
   }
 
   if (new_failures > 0L) {
@@ -398,7 +421,7 @@
                                     response_type,
                                     paste0("FU", fu_level),
                                     sep = "/"
-                                  )) {
+                                  ), checkpoint_state = NULL) {
 
   response_type <- match.arg(response_type)
 
@@ -437,8 +460,11 @@
   } else {
     character(0)
   }
-  n_cached <- sum(file.exists(checkpoint_files))
-  n_pending <- length(batches) - n_cached
+  n_existing <- sum(file.exists(checkpoint_files))
+  n_unchecked <- n_existing
+  n_reused <- 0L
+  n_rebuilt <- 0L
+  n_pending <- length(batches) - n_existing
   completed_pending <- 0L
   pending_elapsed <- 0
   new_failures <- 0L
@@ -448,21 +474,28 @@
     verbose,
     paste0(
       progress_label, ": ", length(analyte_names), " analytes, ",
-      length(batches), " batches (", n_cached, " cached, ",
-      n_pending, " pending)"
+      length(batches), " batches (", n_existing,
+      " checkpoint files found; contents checked on load)"
     )
   )
-  if (length(batches) > 0L && n_pending == 0L) {
-    .log_33(verbose, paste0(progress_label, ": all batches cached; no workers launched"))
-  }
 
   for (b in seq_along(batches)) {
     batch <- batches[[b]]
     batch_file <- if (!is.null(checkpoint_dir)) file.path(checkpoint_dir, paste0("batch_", b, ".rds")) else NULL
 
-    if (!is.null(batch_file) && file.exists(batch_file)) {
-      all_results[batch] <- readRDS(batch_file)
+    batch_existed <- !is.null(batch_file) && file.exists(batch_file)
+    if (batch_existed) n_unchecked <- n_unchecked - 1L
+    batch_results <- .read_outcome_checkpoint(
+      batch_file, analyte_names[batch], fu_level, "tte", checkpoint_state
+    )
+    if (!is.null(batch_results)) {
+      all_results[batch] <- batch_results
+      n_reused <- n_reused + 1L
       next
+    }
+    if (batch_existed) {
+      n_rebuilt <- n_rebuilt + 1L
+      n_pending <- n_pending + 1L
     }
 
     batch_started <- proc.time()[["elapsed"]]
@@ -562,8 +595,7 @@
     }
 
     if (!is.null(batch_file)) {
-      saveRDS(batch_results, paste0(batch_file, ".tmp"))
-      file.rename(paste0(batch_file, ".tmp"), batch_file)
+      .save_outcome_checkpoint(batch_results, batch_file)
     }
 
     all_results[batch] <- batch_results
@@ -576,11 +608,17 @@
       estimated_remaining <- pending_elapsed / completed_pending * remaining_pending
       paste0(
         "; estimated ", .format_duration_33(estimated_remaining),
-        " remaining for ", remaining_pending, " pending batch",
+        " remaining for ", remaining_pending,
+        if (n_unchecked > 0L) " known pending batch" else " pending batch",
         if (remaining_pending == 1L) "" else "es"
       )
     } else {
       ""
+    }
+    if (n_unchecked > 0L) {
+      eta_text <- paste0(eta_text, "; ", n_unchecked,
+                         " checkpoint file", if (n_unchecked == 1L) "" else "s",
+                         " still to validate")
     }
 
     .log_33(
@@ -595,6 +633,14 @@
         eta_text
       )
     )
+  }
+
+  .log_33(verbose, sprintf(
+    "%s: %d batches reused, %d newly computed, %d rebuilt from older formats",
+    progress_label, n_reused, completed_pending - n_rebuilt, n_rebuilt
+  ))
+  if (n_reused > 0L && n_reused == length(batches)) {
+    .log_33(verbose, paste0(progress_label, ": all batches reused; no workers launched"))
   }
 
   if (new_failures > 0L) {
@@ -630,7 +676,8 @@
                               checkpoint_dir = NULL,
                               checkpoint_batch_size = 2000L,
                               verbose = FALSE,
-                              progress_label = response_type) {
+                              progress_label = response_type,
+                              checkpoint_state = NULL) {
 
   response_type <- match.arg(response_type)
 
@@ -692,7 +739,8 @@
         checkpoint_dir = fu_checkpoint_dir,
         checkpoint_batch_size = checkpoint_batch_size,
         verbose = verbose,
-        progress_label = fu_progress_label
+        progress_label = fu_progress_label,
+        checkpoint_state = checkpoint_state
       )
     } else {
       .perform_tte_analysis(
@@ -706,7 +754,8 @@
         checkpoint_dir = fu_checkpoint_dir,
         checkpoint_batch_size = checkpoint_batch_size,
         verbose = verbose,
-        progress_label = fu_progress_label
+        progress_label = fu_progress_label,
+        checkpoint_state = checkpoint_state
       )
     }
 
@@ -824,7 +873,7 @@
                                      filtered_probes = NULL,
                                      checkpoint_dir = NULL,
                                      checkpoint_batch_size = 2000L,
-                                     verbose = FALSE) {
+                                     verbose = FALSE, checkpoint_state = NULL) {
 
   response_type <- match.arg(response_type)
   outputs <- list(all = NULL, male = NULL, female = NULL)
@@ -852,7 +901,8 @@
       stratum_checkpoint_dir,
       checkpoint_batch_size,
       verbose = verbose,
-      progress_label = progress_label
+      progress_label = progress_label,
+      checkpoint_state = checkpoint_state
     )
 
     if (is.null(analysis_results)) {

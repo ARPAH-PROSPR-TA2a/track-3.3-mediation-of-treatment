@@ -344,6 +344,178 @@ local({
         "Cox resume restores unavailable/failed rows and metadata without recomputing batches")
 })
 
+local({
+  directory <- tempfile("outcomewas-checkpoint-compatibility-")
+  dir.create(directory)
+  on.exit(unlink(directory, recursive = TRUE), add = TRUE)
+  snapshot <- function(paths) {
+    list(contents = tools::md5sum(paths), modified = file.info(paths)$mtime)
+  }
+  capture_run <- function(fixture, checkpoint, cores, batch_size = 2L) {
+    messages <- character()
+    result <- withCallingHandlers(
+      suppressWarnings(FAST_outcome_WAS(
+        fixture$pheno, fixture$omics, omics_type = "Proteomics",
+        additional_covariates = "AGE", treatment_labels = fixture$treatment_labels,
+        n_cores = cores, checkpoint_dir = checkpoint,
+        checkpoint_batch_size = batch_size, verbose = FALSE
+      )),
+      message = function(condition) {
+        messages <<- c(messages, conditionMessage(condition))
+        invokeRestart("muffleMessage")
+      }
+    )
+    list(result = result, messages = messages)
+  }
+  cases <- list(
+    multiarm_continuous = list(fixture = continuous, reference = continuous_result),
+    multiarm_cox = list(fixture = tte, reference = tte_result),
+    binary_continuous = list(fixture = binary, reference = binary_result),
+    binary_cox = list(fixture = binary_tte, reference = binary_tte_result)
+  )
+  cases$binary_continuous$fixture$treatment_labels <- NULL
+  cases$binary_cox$fixture$treatment_labels <- NULL
+  for (case_name in names(cases)) {
+    fixture <- cases[[case_name]]$fixture
+    reference <- cases[[case_name]]$reference
+    checkpoint <- file.path(directory, case_name)
+    fresh <- capture_run(fixture, checkpoint, 1L)
+    check(equal(fresh$result, reference), paste(case_name, "checkpointed output matches fresh reference"))
+    files <- list.files(checkpoint, "^batch_[0-9]+[.]rds$", recursive = TRUE, full.names = TRUE)
+    old_files <- file.path(checkpoint, c("change", "level"), "all", "FU1", "batch_1.rds")
+    compatible_files <- setdiff(files, old_files)
+    for (cores in c(1L, 2L)) {
+      # A batch containing one old entry still requires a complete refit.
+      old <- readRDS(old_files[1L])
+      old[[1L]]$outcome_effects$STATUS <- NULL
+      old[[1L]]$outcome_effects$P_VALUE <- 0.999
+      old[[1L]]$coefficients$P_VALUE[old[[1L]]$coefficients$COEFFICIENT == "analyte"] <- 0.999
+      saveRDS(old, old_files[1L])
+      failed <- readRDS(old_files[2L])
+      failed[1L] <- list(NULL)
+      saveRDS(failed, old_files[2L])
+
+      Sys.setFileTime(compatible_files, as.POSIXct("2001-01-01", tz = "UTC"))
+      before <- snapshot(compatible_files)
+      recovered <- capture_run(fixture, checkpoint, cores)
+      label <- paste(case_name, cores, "core legacy recovery")
+      check(equal(recovered$result, reference), paste(label, "matches the entire fresh result"))
+      check(identical(before, snapshot(compatible_files)), paste(label, "preserves compatible files"))
+      check(sum(grepl("Older-format checkpoints detected", recovered$messages, fixed = TRUE)) == 1L,
+            paste(label, "announces recomputation once with verbose FALSE"))
+      check(all(vapply(old_files, function(path) {
+        all(vapply(readRDS(path), function(entry) {
+          !is.null(entry) && "STATUS" %in% names(entry$outcome_effects)
+        }, logical(1)))
+      }, logical(1))), paste(label, "replaces old and NULL entries with current results"))
+      for (analysis in analyses) {
+        for (stratum in strata) {
+          effects <- recovered$result[[analysis]][[stratum]]$outcome_effects
+          for (fu in 1:2) {
+            rows <- effects$FU == fu
+            check(equal(effects$BH_P_VALUE[rows], p.adjust(effects$P_VALUE[rows], "BH")),
+                  paste(label, analysis, stratum, paste0("FU", fu), "BH uses every batch"))
+          }
+        }
+      }
+
+      Sys.setFileTime(files, as.POSIXct("2001-01-01", tz = "UTC"))
+      before <- snapshot(files)
+      second_resume <- capture_run(fixture, checkpoint, cores)
+      check(equal(second_resume$result, reference) && identical(before, snapshot(files)) &&
+              !any(grepl("Older-format checkpoints detected", second_resume$messages, fixed = TRUE)),
+            paste(label, "second resume reuses every repaired batch"))
+    }
+    before <- snapshot(files)
+    error <- tryCatch({ capture_run(fixture, checkpoint, 1L, batch_size = nrow(fixture$omics)); NULL },
+                      error = identity)
+    check(inherits(error, "error") && grepl(old_files[1L], conditionMessage(error), fixed = TRUE) &&
+            identical(before, snapshot(files)),
+          paste(case_name, "changed batch size identifies and preserves the incompatible checkpoint"))
+  }
+
+  checkpoint_file <- file.path(directory, "checkpoint_case.rds")
+  current <- readRDS(file.path(directory, "multiarm_continuous", "change", "all", "FU1", "batch_1.rds"))
+  analytes <- continuous$omics$ANALYTE_NAME[1:2]
+  read_fixture <- function(outcome_type = "continuous") .quiet_multiarm(.read_outcome_checkpoint(
+    checkpoint_file, analytes, 1L, outcome_type
+  ))
+  for (outcome_type in c("continuous", "tte")) {
+    for (status in c("fit_error", "not_estimable")) {
+      unavailable_batch <- lapply(analytes, .empty_outcome_result, fu_level = 1L,
+                                   outcome_type = outcome_type, status = status)
+      saveRDS(unavailable_batch, checkpoint_file)
+      before <- snapshot(checkpoint_file)
+      check(identical(read_fixture(outcome_type), unavailable_batch) &&
+              identical(before, snapshot(checkpoint_file)),
+            paste(outcome_type, status, "current typed empty coefficients are reusable"))
+    }
+  }
+  saveRDS(list(NULL, NULL), checkpoint_file)
+  before <- snapshot(checkpoint_file)
+  check(is.null(read_fixture()) && identical(before, snapshot(checkpoint_file)),
+        "Historical all-NULL batch requires a refit and survives assessment")
+
+  wrong_analyte <- current
+  wrong_analyte[[2L]]$outcome_effects$ANALYTE_NAME <- "unexpected_analyte"
+  wrong_fu <- current
+  wrong_fu[[1L]]$outcome_effects$FU <- 2L
+  wrong_coefficient <- current
+  wrong_coefficient[[1L]]$coefficients$ANALYTE_NAME[1L] <- "unexpected_analyte"
+  missing_column <- current
+  missing_column[[1L]]$outcome_effects$SE <- NULL
+  duplicate_coefficient <- current
+  duplicate_coefficient[[1L]]$coefficients <- rbind(
+    duplicate_coefficient[[1L]]$coefficients,
+    duplicate_coefficient[[1L]]$coefficients[1L, , drop = FALSE]
+  )
+  old_and_malformed <- wrong_analyte
+  old_and_malformed[[1L]]$outcome_effects$STATUS <- NULL
+  null_and_malformed <- wrong_analyte
+  null_and_malformed[1L] <- list(NULL)
+  malformed <- list(
+    unknown_structure = list(list(results = current[[1L]]), current[[2L]]),
+    wrong_length = current[1L],
+    wrong_order = rev(current),
+    wrong_analyte = wrong_analyte,
+    wrong_fu = wrong_fu,
+    wrong_coefficient = wrong_coefficient,
+    missing_column = missing_column,
+    duplicate_coefficient = duplicate_coefficient,
+    old_and_malformed = old_and_malformed,
+    null_and_malformed = null_and_malformed
+  )
+  expect_checkpoint_error <- function(label, outcome_type = "continuous") {
+    before <- snapshot(checkpoint_file)
+    error <- tryCatch({ read_fixture(outcome_type); NULL }, error = identity)
+    check(inherits(error, "error") && grepl(checkpoint_file, conditionMessage(error), fixed = TRUE) &&
+            identical(before, snapshot(checkpoint_file)),
+          paste(label, "identifies and preserves the incompatible checkpoint"))
+  }
+  for (shape in names(malformed)) {
+    saveRDS(malformed[[shape]], checkpoint_file)
+    expect_checkpoint_error(shape)
+  }
+  saveRDS(current, checkpoint_file)
+  expect_checkpoint_error("Linear checkpoint used for Cox", "tte")
+  cox <- readRDS(file.path(directory, "multiarm_cox", "change", "all", "FU1", "batch_1.rds"))
+  saveRDS(cox, checkpoint_file)
+  expect_checkpoint_error("Cox checkpoint used for linear")
+  writeLines("This file is not an RDS object.", checkpoint_file)
+  expect_checkpoint_error("Unreadable RDS")
+
+  saveRDS(list(NULL, NULL), checkpoint_file)
+  before <- snapshot(checkpoint_file)
+  failing_writer <- .save_outcome_checkpoint
+  writer_environment <- new.env(parent = environment(failing_writer))
+  writer_environment$file.rename <- function(...) FALSE
+  environment(failing_writer) <- writer_environment
+  error <- tryCatch({ failing_writer(current, checkpoint_file); NULL }, error = identity)
+  check(inherits(error, "error") && grepl(checkpoint_file, conditionMessage(error), fixed = TRUE) &&
+          identical(before, snapshot(checkpoint_file)) && !file.exists(paste0(checkpoint_file, ".tmp")),
+        "Failed checkpoint replacement preserves the old file, reports its path and removes temporary output")
+})
+
 annotation <- data.frame(AptName = continuous$omics$ANALYTE_NAME, stringsAsFactors = FALSE)
 for (column in .protein_annotation_columns) annotation[[column]] <- paste(column, annotation$AptName)
 annotated <- get_annotated_results(unavailable_result, annotation, c(`1` = "12 months", `2` = "24 months"))

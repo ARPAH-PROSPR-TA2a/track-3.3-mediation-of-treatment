@@ -42,6 +42,7 @@ source(file.path(.outcomewas_dir, "R", "treatment_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "followup_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "validation_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "reporting_helpers.R"))
+source(file.path(.outcomewas_dir, "R", "checkpoint_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "analysis_helpers.R"))
 source(file.path(.outcomewas_dir, "R", "proteomics_translation_helpers.R"))
 
@@ -59,6 +60,11 @@ FAST_outcome_WAS <- function(pheno,
                              fu_labels = NULL) {
 
   analysis_started <- proc.time()[["elapsed"]]
+
+  # Share one notice across all responses, strata, and follow-up visits.
+  checkpoint_state <- new.env(parent = emptyenv())
+  checkpoint_state$directory <- checkpoint_dir
+  checkpoint_state$notified <- FALSE
 
   if (is.null(n_cores)) {
     detected_cores <- parallel::detectCores()
@@ -126,7 +132,8 @@ FAST_outcome_WAS <- function(pheno,
     filtered_probes = filtered_probes,
     checkpoint_dir = checkpoint_dir,
     checkpoint_batch_size = checkpoint_batch_size,
-    verbose = verbose
+    verbose = verbose,
+    checkpoint_state = checkpoint_state
   )
 
   analysis_level <- .run_stratified_analysis(
@@ -139,7 +146,8 @@ FAST_outcome_WAS <- function(pheno,
     filtered_probes = filtered_probes,
     checkpoint_dir = checkpoint_dir,
     checkpoint_batch_size = checkpoint_batch_size,
-    verbose = verbose
+    verbose = verbose,
+    checkpoint_state = checkpoint_state
   )
 
   .log_33(

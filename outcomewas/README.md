@@ -314,7 +314,7 @@ With `fu_labels`, `pheno_summary`, `arm_counts`, and
 
 For large analyses, passing `checkpoint_dir` enables resumable execution:
 analytes are processed in batches, and each completed batch is saved to disk.
-If the run is interrupted, re-running the same call skips completed batches and
+If the run is interrupted, re-running the same call reuses compatible batches and
 continues from where it left off.
 
 ```r
@@ -339,14 +339,39 @@ checkpoints/
   ...
 ```
 
+Each checkpoint is checked as it loads. Compatible batches must contain one
+result for each expected analyte, in the expected order and at the expected
+follow-up. The coefficient and outcome-effect tables must match the continuous
+or Cox model being run. Unavailable fits retain their explicit status rows and
+may have empty coefficient tables. Compatibility is determined from the stored
+contents.
+
+FAST recognizes older batches saved before explicit outcome-effect `STATUS`
+rows were introduced, including their `NULL` failed-fit entries. It recomputes
+those batches from the current inputs and replaces each old file after
+successfully saving its replacement. Compatible batches in the same directory
+are reused. A notice identifies the directory once per run, even with
+`verbose = FALSE`.
+
+Unreadable files, unrecognized contents, and mismatched batches stop the run
+with the affected file path and guidance to use a fresh `checkpoint_dir`. The
+rejected file is preserved. For example, set
+`checkpoint_dir = "checkpoints_fresh"` to a new, unused directory; FAST creates
+it automatically.
+
+With `verbose = TRUE`, progress distinguishes files found from batches actually
+reused, newly computed, or rebuilt. Time estimates cover known pending model
+fits; any checkpoint files still awaiting validation are reported separately.
+
 Checkpoint files are tied to the inputs, outcome, covariates, visit coding,
-analyte ordering, and `checkpoint_batch_size`. Cached batches are loaded by
-file existence without checking those settings. Use a new checkpoint directory
-when any of them changes, including treatment labels, switching
-from M-values to beta values, or updating across this result-schema change. Save/resume
-assumes unchanged data and settings; it does not fingerprint the run.
-Changing only `fu_labels` is safe on resume: labels are attached after cached
-batches are read, and neither checkpoint payloads nor numeric FU paths change.
+analyte ordering, and `checkpoint_batch_size`. Use a new checkpoint directory
+when these change, including switching from M-values to beta values or changing
+which visit a numeric FU code represents. The checks do not compare underlying
+data values or covariate settings. Save/resume assumes unchanged data and
+settings; it does not fingerprint the run.
+Changing only display labels (`fu_labels` or `treatment_labels`) is safe on
+resume: labels are applied after cached batches are read, and neither checkpoint
+payloads nor numeric FU paths change.
 
 ## Data Format Requirements
 
